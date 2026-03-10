@@ -43,3 +43,33 @@ dependencies {
 tasks.named('test') {
     useJUnitPlatform()
 }
+
+// bootRun 실행 전 8080 포트를 사용 중인 프로세스를 종료
+tasks.named('bootRun') {
+    doFirst {
+        if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+            def result = new ByteArrayOutputStream()
+            exec {
+                commandLine 'cmd', '/c', 'netstat -ano | findstr :8080 | findstr LISTENING'
+                standardOutput = result
+                ignoreExitValue = true
+            }
+            result.toString().eachLine { line ->
+                def parts = line.trim().split(/\s+/)
+                if (parts.length >= 5) {
+                    def pid = parts[4]
+                    exec {
+                        commandLine 'cmd', '/c', "taskkill /F /PID ${pid}"
+                        ignoreExitValue = true
+                    }
+                    println "Killed process on port 8080 (PID: ${pid})"
+                }
+            }
+        } else {
+            exec {
+                commandLine 'bash', '-c', "lsof -ti:8080 | xargs -r kill -9"
+                ignoreExitValue = true
+            }
+        }
+    }
+}

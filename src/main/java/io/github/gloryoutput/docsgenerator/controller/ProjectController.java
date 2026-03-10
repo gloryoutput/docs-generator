@@ -76,4 +76,19 @@ public class ProjectController {
     public ApiResponse<List<RepositoryMapResponse>> getRepositories(@PathVariable String idProject) {
         return ApiResponse.ok(projectService.getRepositories(idProject));
     }
+
+    /**
+     * 레포지토리 정보를 수정합니다.
+     *
+     * @param idProjectRepositoryMap 레포지토리 매핑 ID
+     * @param request 수정 요청
+     * @return 수정된 레포지토리 정보
+     */
+    @PutMapping("/repositories/{idProjectRepositoryMap}")
+    @Operation(summary = "레포지토리 수정", description = "레포지토리 정보를 수정합니다")
+    public ApiResponse<RepositoryMapResponse> updateRepository(
+            @PathVariable String idProjectRepositoryMap,
+            @RequestBody RepositoryMapCreateRequest request) {
+        return ApiResponse.ok(projectService.updateRepository(idProjectRepositoryMap, request));
+    }
 }

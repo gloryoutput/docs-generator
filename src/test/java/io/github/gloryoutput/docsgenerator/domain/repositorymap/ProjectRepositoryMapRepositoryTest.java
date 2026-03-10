@@ -1,6 +1,8 @@
 package io.github.gloryoutput.docsgenerator.domain.repositorymap;
 
 import io.github.gloryoutput.docsgenerator.domain.project.Project;
+import io.github.gloryoutput.docsgenerator.domain.project.ProjectCode;
+import io.github.gloryoutput.docsgenerator.domain.project.ProjectCodeRepository;
 import io.github.gloryoutput.docsgenerator.domain.project.ProjectRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -8,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import java.util.List;
+import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -22,12 +25,16 @@ class ProjectRepositoryMapRepositoryTest {
     private ProjectRepositoryMapRepository repositoryMapRepository;
     @Autowired
     private ProjectRepository projectRepository;
-    private String idProject;
+    @Autowired
+    private ProjectCodeRepository projectCodeRepository;
+    private UUID idProject;
 
     @BeforeEach
     void setUp() {
+        ProjectCode code = projectCodeRepository.save(
+                ProjectCode.builder().projectCode("PRJ_MAP_TEST").build());
         Project project = Project.builder()
-                .projectCode("PRJ_MAP_TEST")
+                .idProjectCode(code.getIdProjectCode())
                 .projectName("매핑 테스트 프로젝트")
                 .build();
         Project saved = projectRepository.save(project);
@@ -42,7 +49,7 @@ class ProjectRepositoryMapRepositoryTest {
                 .idProject(idProject)
                 .repositoryName("api-server")
                 .repositoryUrl("https://github.com/example/api-server.git")
-                .defaultBranch("main")
+                .targetBranch("main")
                 .priorityOrder(1)
                 .build();
         // when
@@ -51,7 +58,7 @@ class ProjectRepositoryMapRepositoryTest {
         assertThat(saved.getIdProjectRepositoryMap()).isNotNull();
         assertThat(saved.getRepositoryName()).isEqualTo("api-server");
         assertThat(saved.getRepositoryUrl()).isEqualTo("https://github.com/example/api-server.git");
-        assertThat(saved.getDefaultBranch()).isEqualTo("main");
+        assertThat(saved.getTargetBranch()).isEqualTo("main");
         assertThat(saved.getActive()).isTrue();
         assertThat(saved.getCreatedAt()).isNotNull();
     }
@@ -64,21 +71,21 @@ class ProjectRepositoryMapRepositoryTest {
                 .idProject(idProject)
                 .repositoryName("api-server")
                 .repositoryUrl("https://github.com/example/api-server.git")
-                .defaultBranch("main")
+                .targetBranch("main")
                 .priorityOrder(1)
                 .build());
         repositoryMapRepository.save(ProjectRepositoryMap.builder()
                 .idProject(idProject)
                 .repositoryName("admin-server")
                 .repositoryUrl("https://github.com/example/admin-server.git")
-                .defaultBranch("develop")
+                .targetBranch("develop")
                 .priorityOrder(2)
                 .build());
         repositoryMapRepository.save(ProjectRepositoryMap.builder()
                 .idProject(idProject)
                 .repositoryName("common-lib")
                 .repositoryUrl("https://github.com/example/common-lib.git")
-                .defaultBranch("main")
+                .targetBranch("main")
                 .priorityOrder(3)
                 .build());
         // when

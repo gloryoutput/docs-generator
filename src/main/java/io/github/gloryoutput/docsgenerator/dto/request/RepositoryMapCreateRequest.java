@@ -14,6 +14,6 @@ import lombok.NoArgsConstructor;
 public class RepositoryMapCreateRequest {
     private String repositoryName;
     private String repositoryUrl;
-    private String defaultBranch;
+    private String targetBranch;
     private Integer priorityOrder;
 }

@@ -18,18 +18,18 @@ public class RepositoryMapResponse {
     private String idProject;
     private String repositoryName;
     private String repositoryUrl;
-    private String defaultBranch;
+    private String targetBranch;
     private Integer priorityOrder;
     private Boolean active;
     private LocalDateTime createdAt;
 
     public static RepositoryMapResponse from(ProjectRepositoryMap map) {
         return RepositoryMapResponse.builder()
-                .idProjectRepositoryMap(map.getIdProjectRepositoryMap())
-                .idProject(map.getIdProject())
+                .idProjectRepositoryMap(map.getIdProjectRepositoryMap().toString())
+                .idProject(map.getIdProject().toString())
                 .repositoryName(map.getRepositoryName())
                 .repositoryUrl(map.getRepositoryUrl())
-                .defaultBranch(map.getDefaultBranch())
+                .targetBranch(map.getTargetBranch())
                 .priorityOrder(map.getPriorityOrder())
                 .active(map.getActive())
                 .createdAt(map.getCreatedAt())

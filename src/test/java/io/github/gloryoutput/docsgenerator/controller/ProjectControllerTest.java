@@ -63,7 +63,8 @@ class ProjectControllerTest {
                 .andExpect(jsonPath("$.data.projectCode").value("TEST_PRJ"))
                 .andExpect(jsonPath("$.data.projectName").value("테스트 프로젝트"))
                 .andExpect(jsonPath("$.data.active").value(true))
-                .andExpect(jsonPath("$.data.idProject").isNotEmpty());
+                .andExpect(jsonPath("$.data.idProject").isNotEmpty())
+                .andExpect(jsonPath("$.data.idProjectCode").isNotEmpty());
     }
 
     @Test
@@ -96,9 +97,9 @@ class ProjectControllerTest {
         // 레포 3개 한 번에 등록
         String reposBody = """
                 [
-                    {"repositoryName":"api-server","repositoryUrl":"https://github.com/example/api-server.git","defaultBranch":"main","priorityOrder":1},
-                    {"repositoryName":"admin-server","repositoryUrl":"https://github.com/example/admin-server.git","defaultBranch":"develop","priorityOrder":2},
-                    {"repositoryName":"common-lib","repositoryUrl":"https://github.com/example/common-lib.git","defaultBranch":"main","priorityOrder":3}
+                    {"repositoryName":"api-server","repositoryUrl":"https://github.com/example/api-server.git","targetBranch":"main","priorityOrder":1},
+                    {"repositoryName":"admin-server","repositoryUrl":"https://github.com/example/admin-server.git","targetBranch":"develop","priorityOrder":2},
+                    {"repositoryName":"common-lib","repositoryUrl":"https://github.com/example/common-lib.git","targetBranch":"main","priorityOrder":3}
                 ]
                 """;
         mockMvc.perform(post("/api/projects/" + projectId + "/repositories")

@@ -22,30 +22,41 @@ import java.util.UUID;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class ProjectRepositoryMap extends BaseEntity {
     @Id
-    @Column(name = "id_project_repository_map", nullable = false, updatable = false, length = 36)
-    private String idProjectRepositoryMap;
-    @Column(name = "id_project", nullable = false, length = 36)
-    private String idProject;
+    @Column(name = "id_project_repository_map", nullable = false, updatable = false, columnDefinition = "binary(16)")
+    private UUID idProjectRepositoryMap;
+    @Column(name = "id_project", nullable = false, columnDefinition = "binary(16)")
+    private UUID idProject;
     @Column(name = "repository_name", nullable = false)
     private String repositoryName;
     @Column(name = "repository_url", nullable = false)
     private String repositoryUrl;
-    @Column(name = "default_branch", nullable = false)
-    private String defaultBranch = "main";
+    @Column(name = "target_branch", nullable = false)
+    private String targetBranch = "main";
     @Column(name = "priority_order")
     private Integer priorityOrder = 0;
     @Column(name = "active", nullable = false)
     private Boolean active = true;
 
     @Builder
-    public ProjectRepositoryMap(String idProject, String repositoryName,
-                                 String repositoryUrl, String defaultBranch, Integer priorityOrder) {
-        this.idProjectRepositoryMap = UUID.randomUUID().toString();
+    public ProjectRepositoryMap(UUID idProject, String repositoryName,
+                                 String repositoryUrl, String targetBranch, Integer priorityOrder) {
+        this.idProjectRepositoryMap = UUID.randomUUID();
         this.idProject = idProject;
         this.repositoryName = repositoryName;
         this.repositoryUrl = repositoryUrl;
-        this.defaultBranch = defaultBranch != null ? defaultBranch : "main";
+        this.targetBranch = targetBranch != null ? targetBranch : "main";
         this.priorityOrder = priorityOrder != null ? priorityOrder : 0;
         this.active = true;
+    }
+
+    /**
+     * 레포지토리 정보를 수정합니다.
+     */
+    public void update(String repositoryName, String repositoryUrl,
+                       String targetBranch, Integer priorityOrder) {
+        if (repositoryName != null) this.repositoryName = repositoryName;
+        if (repositoryUrl != null) this.repositoryUrl = repositoryUrl;
+        if (targetBranch != null) this.targetBranch = targetBranch;
+        if (priorityOrder != null) this.priorityOrder = priorityOrder;
     }
 }

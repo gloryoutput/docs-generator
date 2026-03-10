@@ -5,11 +5,11 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 프로젝트 JPA Repository
+ * 프로젝트 코드 JPA Repository
  *
  * @author Lodong
  * @since 1.0.0
  */
-public interface ProjectRepository extends JpaRepository<Project, UUID> {
-    Optional<Project> findByIdProjectCode(UUID idProjectCode);
+public interface ProjectCodeRepository extends JpaRepository<ProjectCode, UUID> {
+    Optional<ProjectCode> findByProjectCode(String projectCode);
 }
