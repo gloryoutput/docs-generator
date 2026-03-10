@@ -22,7 +22,7 @@ import java.util.stream.Collectors;
  * @author Lodong
  * @since 1.0.0
  */
-@RestControllerAdvice
+@RestControllerAdvice(basePackages = "io.github.gloryoutput.docsgenerator.controller")
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class GlobalExceptionHandler {
 
