@@ -94,9 +94,10 @@ public class LlmSummarizerService {
         try {
             Path dir = Paths.get(promptOutputDir);
             Files.createDirectories(dir);
-            String content = "=== SYSTEM PROMPT ===\n" + systemPrompt +
-                    "\n\n=== USER PROMPT ===\n" + userPrompt;
-            Path filePath = dir.resolve("llm_input_" + timestamp + ".txt");
+            String content = "# LLM Input\n\n" +
+                    "## System Prompt\n\n" + systemPrompt +
+                    "\n\n## User Prompt\n\n" + userPrompt;
+            Path filePath = dir.resolve("llm_input_" + timestamp + ".md");
             Files.writeString(filePath, content, StandardCharsets.UTF_8);
             log.info("LLM 입력 파일 저장 완료: {}", filePath.toAbsolutePath());
         } catch (IOException e) {
@@ -110,8 +111,9 @@ public class LlmSummarizerService {
         try {
             Path dir = Paths.get(promptOutputDir);
             Files.createDirectories(dir);
-            Path filePath = dir.resolve("llm_output_" + timestamp + ".txt");
-            Files.writeString(filePath, output, StandardCharsets.UTF_8);
+            String content = "# LLM Output\n\n" + output;
+            Path filePath = dir.resolve("llm_output_" + timestamp + ".md");
+            Files.writeString(filePath, content, StandardCharsets.UTF_8);
             log.info("LLM 출력 파일 저장 완료: {}", filePath.toAbsolutePath());
         } catch (IOException e) {
             log.warn("LLM 출력 파일 저장 실패: {}", e.getMessage());

@@ -439,8 +439,8 @@ public class ChangeEventService {
     /**
      * Git diff 결과에서 코드 변경 이벤트를 커밋 단위로 생성합니다.
      *
-     * <p>커밋 메시지를 기능명으로 사용하여 파일 단위가 아닌 이벤트 단위로 보고서를 작성합니다.
-     * noise 필터링 후 변경 파일이 없는 커밋은 건너뜁니다.</p>
+     * <p>커밋 메시지를 기능명으로 사용하고, 변경 파일 목록/레이어/키워드 정보를
+     * description에 포함하여 LLM이 보고서를 작성할 수 있도록 합니다.</p>
      */
     private List<ChangeEvent> buildCodeChangeEvents(UUID idAnalysisRequest, UUID idProject,
                                                      List<GitDiffResult> gitResults) {
@@ -449,19 +449,16 @@ public class ChangeEventService {
             if (gitResult.getCommits() == null) continue;
             String repoName = gitResult.getRepositoryName();
             for (GitDiffResult.CommitInfo commit : gitResult.getCommits()) {
-                // noise 필터링 후 변경 파일이 없으면 건너뜀
                 if (commit.getFileChanges() == null || commit.getFileChanges().isEmpty()) {
                     continue;
                 }
-                int fileCount = commit.getFileChanges().size();
+                String description = buildCodeDescription(repoName, commit);
                 events.add(ChangeEvent.builder()
                         .idAnalysisRequest(idAnalysisRequest)
                         .idProject(idProject)
                         .category("CODE_CHANGE")
                         .title(commit.getMessage())
-                        .description(repoName + " 레포지토리에서 " + fileCount
-                                + "개 파일이 변경되었습니다. (작성자: " + commit.getAuthorName()
-                                + ", " + commit.getDateTime() + ")")
+                        .description(description)
                         .severity("LOW")
                         .confidenceScore(0.8)
                         .sourceType("GIT")
@@ -470,6 +467,69 @@ public class ChangeEventService {
             }
         }
         return events;
+    }
+    /**
+     * 커밋의 변경 파일 정보를 기반으로 상세 description을 구성합니다.
+     *
+     * <p>레포지토리명, 작성자, 일시, 변경 레이어, 키워드, 파일별 변경 내역을 포함합니다.</p>
+     */
+    private String buildCodeDescription(String repoName, GitDiffResult.CommitInfo commit) {
+        List<String> filePaths = commit.getFileChanges().stream()
+                .map(GitDiffResult.FileChange::getFilePath)
+                .filter(Objects::nonNull)
+                .toList();
+        Set<String> layers = LayerDetector.detectLayers(filePaths);
+        // 파일별 키워드 수집
+        Map<String, Integer> keywordFreq = new LinkedHashMap<>();
+        for (String fp : filePaths) {
+            for (String kw : LayerDetector.extractKeywords(fp)) {
+                keywordFreq.merge(kw, 1, Integer::sum);
+            }
+        }
+        List<String> topKeywords = keywordFreq.entrySet().stream()
+                .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
+                .limit(5)
+                .map(Map.Entry::getKey)
+                .toList();
+        // 변경 타입별 파일 그룹핑
+        Map<String, List<String>> byChangeType = new LinkedHashMap<>();
+        for (GitDiffResult.FileChange fc : commit.getFileChanges()) {
+            String ct = fc.getChangeType() != null ? fc.getChangeType() : "MODIFY";
+            String fileName = fc.getFilePath() != null ? extractFileName(fc.getFilePath()) : "unknown";
+            byChangeType.computeIfAbsent(ct, k -> new ArrayList<>()).add(fileName);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("[").append(repoName).append("] ");
+        sb.append("작성자: ").append(commit.getAuthorName());
+        sb.append(", 일시: ").append(commit.getDateTime());
+        sb.append(", 변경 파일 ").append(filePaths.size()).append("개");
+        if (!layers.isEmpty()) {
+            sb.append(" | 영향 레이어: ").append(String.join(", ", layers));
+        }
+        if (!topKeywords.isEmpty()) {
+            sb.append(" | 관련 키워드: ").append(String.join(", ", topKeywords));
+        }
+        // 변경 타입별 파일 목록
+        for (Map.Entry<String, List<String>> entry : byChangeType.entrySet()) {
+            sb.append(" | ").append(entry.getKey()).append(": ");
+            List<String> files = entry.getValue();
+            if (files.size() <= 10) {
+                sb.append(String.join(", ", files));
+            } else {
+                sb.append(String.join(", ", files.subList(0, 10)));
+                sb.append(" 외 ").append(files.size() - 10).append("개");
+            }
+        }
+        return sb.toString();
+    }
+    /**
+     * 파일 경로에서 파일명만 추출합니다.
+     */
+    private String extractFileName(String filePath) {
+        int lastSlash = filePath.lastIndexOf('/');
+        int lastBackSlash = filePath.lastIndexOf('\\');
+        int idx = Math.max(lastSlash, lastBackSlash);
+        return idx >= 0 ? filePath.substring(idx + 1) : filePath;
     }
 
     /**
