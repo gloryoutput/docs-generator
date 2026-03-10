@@ -30,7 +30,6 @@ public class AnthropicLlmClient implements LlmClient {
     private static final int MAX_TOKENS = 4096;
     private static final double TEMPERATURE = 0.3;
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final RestClient.Builder restClientBuilder;
     @Value("${app.llm.api-url:https://api.anthropic.com}")
     private String apiUrl;
     @Value("${app.llm.api-key:}")
@@ -39,13 +38,9 @@ public class AnthropicLlmClient implements LlmClient {
     private String model;
     private RestClient restClient;
 
-    public AnthropicLlmClient(RestClient.Builder restClientBuilder) {
-        this.restClientBuilder = restClientBuilder;
-    }
-
     @PostConstruct
     void init() {
-        this.restClient = restClientBuilder
+        this.restClient = RestClient.builder()
                 .baseUrl(apiUrl)
                 .build();
         log.info("Anthropic LLM Client 초기화 완료 - model: {}, api-url: {}", model, apiUrl);

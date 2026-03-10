@@ -1,8 +1,5 @@
 package io.github.gloryoutput.docsgenerator.summarizer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.gloryoutput.docsgenerator.correlation.CorrelatedGroup;
 import io.github.gloryoutput.docsgenerator.domain.changeevent.ChangeEvent;
 import lombok.extern.slf4j.Slf4j;
@@ -16,7 +13,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.List;
+import java.util.*;
 
 /**
  * LLM을 활용한 보고서 초안 문장 다듬기 서비스 (오케스트레이터)
@@ -41,7 +38,6 @@ public class LlmSummarizerService {
             "- Markdown 형식을 유지하세요.\n" +
             "- 새로운 정보를 추가하지 마세요.";
     private static final DateTimeFormatter FILE_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
-    private final ObjectMapper objectMapper = new ObjectMapper();
     private final LlmClient llmClient;
     @Value("${app.llm.prompt-output-dir:./llm-prompts}")
     private String promptOutputDir;
@@ -67,8 +63,7 @@ public class LlmSummarizerService {
      */
     public String summarize(List<CorrelatedGroup> groups, String originalDraft) {
         try {
-            String eventsJson = buildEventsJson(groups);
-            String userPrompt = buildUserPrompt(eventsJson, originalDraft);
+            String userPrompt = buildUserPrompt(groups, originalDraft);
             String timestamp = LocalDateTime.now().format(FILE_FORMATTER);
             saveInputFile(timestamp, SYSTEM_PROMPT, userPrompt);
             if (llmClient == null) {
@@ -121,30 +116,71 @@ public class LlmSummarizerService {
     }
 
     /**
-     * 변경 이벤트 그룹에서 title/description만 추출하여 JSON 배열 문자열로 변환합니다.
+     * 상관관계 그룹 구조를 유지한 채 상세 정보를 포함한 Markdown 텍스트로 변환합니다.
      */
-    private String buildEventsJson(List<CorrelatedGroup> groups) throws Exception {
-        ArrayNode array = objectMapper.createArrayNode();
+    private String buildEventsMarkdown(List<CorrelatedGroup> groups) {
+        StringBuilder sb = new StringBuilder();
+        int groupIndex = 1;
         for (CorrelatedGroup group : groups) {
-            if (group.getEvents() == null) {
-                continue;
-            }
+            if (group.getEvents() == null || group.getEvents().isEmpty()) continue;
+            sb.append("### 그룹 ").append(groupIndex++).append(": ").append(group.getTitle()).append("\n");
+            sb.append("- **correlationKey**: ").append(group.getCorrelationKey()).append("\n");
+            sb.append("- **이벤트 수**: ").append(group.getEvents().size()).append("건\n\n");
             for (ChangeEvent event : group.getEvents()) {
-                ObjectNode node = objectMapper.createObjectNode();
-                node.put("title", event.getTitle());
-                node.put("description", event.getDescription());
-                array.add(node);
+                sb.append("#### ").append(event.getTitle()).append("\n");
+                sb.append("| 항목 | 값 |\n");
+                sb.append("|------|----|\n");
+                sb.append("| 카테고리 | ").append(event.getCategory()).append(" |\n");
+                sb.append("| 심각도 | ").append(event.getSeverity()).append(" |\n");
+                sb.append("| 소스 타입 | ").append(event.getSourceType()).append(" |\n");
+                sb.append("| 신뢰도 | ").append(event.getConfidenceScore()).append(" |\n\n");
+                if (event.getDescription() != null) {
+                    sb.append("**상세 내용:**\n\n").append(event.getDescription()).append("\n\n");
+                }
             }
         }
-        return objectMapper.writeValueAsString(array);
+        return sb.toString();
+    }
+
+    /**
+     * 전체 변경 통계 요약을 생성합니다.
+     */
+    private String buildSummarySection(List<CorrelatedGroup> groups) {
+        int totalEvents = 0;
+        Map<String, Integer> categoryCount = new LinkedHashMap<>();
+        Map<String, Integer> severityCount = new LinkedHashMap<>();
+        Set<String> allSourceTypes = new LinkedHashSet<>();
+        for (CorrelatedGroup group : groups) {
+            if (group.getEvents() == null) continue;
+            for (ChangeEvent event : group.getEvents()) {
+                totalEvents++;
+                categoryCount.merge(event.getCategory(), 1, Integer::sum);
+                severityCount.merge(event.getSeverity(), 1, Integer::sum);
+                if (event.getSourceType() != null) allSourceTypes.add(event.getSourceType());
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("- **총 변경 그룹**: ").append(groups.size()).append("개\n");
+        sb.append("- **총 변경 이벤트**: ").append(totalEvents).append("건\n");
+        sb.append("- **카테고리별**: ");
+        categoryCount.forEach((k, v) -> sb.append(k).append("(").append(v).append(") "));
+        sb.append("\n");
+        sb.append("- **심각도별**: ");
+        severityCount.forEach((k, v) -> sb.append(k).append("(").append(v).append(") "));
+        sb.append("\n");
+        sb.append("- **소스 타입**: ").append(String.join(", ", allSourceTypes)).append("\n");
+        return sb.toString();
     }
 
     /**
      * 시스템 프롬프트에 전달할 사용자 프롬프트를 구성합니다.
      */
-    private String buildUserPrompt(String eventsJson, String originalDraft) {
-        return "## 변경 이벤트 목록\n" + eventsJson +
-                "\n\n## 보고서 초안\n" + originalDraft +
-                "\n\n위 변경 이벤트를 참고하여 아래 보고서 초안의 문장을 다듬어 주세요.";
+    private String buildUserPrompt(List<CorrelatedGroup> groups, String originalDraft) {
+        String summary = buildSummarySection(groups);
+        String eventsMarkdown = buildEventsMarkdown(groups);
+        return "## 변경 요약\n\n" + summary +
+                "\n## 변경 이벤트 상세\n\n" + eventsMarkdown +
+                "\n## 보고서 초안\n\n" + originalDraft +
+                "\n---\n\n위 변경 이벤트 상세 내용을 참고하여 보고서 초안의 문장을 다듬어 주세요.";
     }
 }

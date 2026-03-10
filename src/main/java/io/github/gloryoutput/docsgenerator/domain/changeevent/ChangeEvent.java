@@ -31,9 +31,9 @@ public class ChangeEvent extends BaseEntity {
     private UUID idProject;
     @Column(name = "category", nullable = false)
     private String category;
-    @Column(name = "title", nullable = false)
+    @Column(name = "title", nullable = false, columnDefinition = "TEXT")
     private String title;
-    @Column(name = "description", columnDefinition = "TEXT")
+    @Column(name = "description", columnDefinition = "MEDIUMTEXT")
     private String description;
     @Column(name = "severity", nullable = false)
     private String severity;
