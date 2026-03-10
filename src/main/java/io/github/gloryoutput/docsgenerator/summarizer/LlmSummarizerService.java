@@ -116,26 +116,21 @@ public class LlmSummarizerService {
     }
 
     /**
-     * 상관관계 그룹 구조를 유지한 채 상세 정보를 포함한 Markdown 텍스트로 변환합니다.
+     * 상관관계 그룹 구조를 유지한 채 핵심 정보만 포함한 Markdown 텍스트로 변환합니다.
+     *
+     * <p>LLM 토큰 절약을 위해 이벤트별 테이블 대신 한 줄 요약 형태로 구성합니다.</p>
      */
     private String buildEventsMarkdown(List<CorrelatedGroup> groups) {
         StringBuilder sb = new StringBuilder();
         int groupIndex = 1;
         for (CorrelatedGroup group : groups) {
             if (group.getEvents() == null || group.getEvents().isEmpty()) continue;
-            sb.append("### 그룹 ").append(groupIndex++).append(": ").append(group.getTitle()).append("\n");
-            sb.append("- **correlationKey**: ").append(group.getCorrelationKey()).append("\n");
-            sb.append("- **이벤트 수**: ").append(group.getEvents().size()).append("건\n\n");
+            sb.append("### ").append(groupIndex++).append(". ").append(group.getTitle()).append("\n\n");
             for (ChangeEvent event : group.getEvents()) {
-                sb.append("#### ").append(event.getTitle()).append("\n");
-                sb.append("| 항목 | 값 |\n");
-                sb.append("|------|----|\n");
-                sb.append("| 카테고리 | ").append(event.getCategory()).append(" |\n");
-                sb.append("| 심각도 | ").append(event.getSeverity()).append(" |\n");
-                sb.append("| 소스 타입 | ").append(event.getSourceType()).append(" |\n");
-                sb.append("| 신뢰도 | ").append(event.getConfidenceScore()).append(" |\n\n");
+                sb.append("**").append(event.getTitle()).append("**");
+                sb.append(" `").append(event.getCategory()).append("` `").append(event.getSeverity()).append("`\n\n");
                 if (event.getDescription() != null) {
-                    sb.append("**상세 내용:**\n\n").append(event.getDescription()).append("\n\n");
+                    sb.append(event.getDescription()).append("\n\n");
                 }
             }
         }

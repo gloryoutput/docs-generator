@@ -252,19 +252,18 @@ public class ChangeEventService {
                 merged.add(group.get(0));
                 continue;
             }
-            // 그룹 내에서 가장 높은 confidenceScore를 가진 이벤트를 기준으로 병합
             ChangeEvent primary = group.get(0);
             for (ChangeEvent event : group) {
                 if (event.getConfidenceScore() > primary.getConfidenceScore()) {
                     primary = event;
                 }
             }
-            // 설명 병합: 기준 이벤트의 설명 + 나머지 이벤트 설명 추가
-            StringBuilder mergedDescription = new StringBuilder();
-            mergedDescription.append(primary.getDescription());
+            String mergedDescription = buildMergedDescription(group);
+            // 심각도는 가장 높은 것을 채택
+            String maxSeverity = primary.getSeverity();
             for (ChangeEvent event : group) {
-                if (event != primary && event.getDescription() != null) {
-                    mergedDescription.append(" / ").append(event.getDescription());
+                if (severityRank(event.getSeverity()) > severityRank(maxSeverity)) {
+                    maxSeverity = event.getSeverity();
                 }
             }
             merged.add(ChangeEvent.builder()
@@ -272,8 +271,8 @@ public class ChangeEventService {
                     .idProject(primary.getIdProject())
                     .category(primary.getCategory())
                     .title(primary.getTitle())
-                    .description(mergedDescription.toString())
-                    .severity(primary.getSeverity())
+                    .description(mergedDescription)
+                    .severity(maxSeverity)
                     .confidenceScore(primary.getConfidenceScore())
                     .sourceType(primary.getSourceType())
                     .correlationKey(primary.getCorrelationKey())
@@ -283,6 +282,33 @@ public class ChangeEventService {
             log.info("유사 이벤트 병합: {}건 → {}건", events.size(), merged.size());
         }
         return merged;
+    }
+    /**
+     * 병합 대상 이벤트들의 description을 통합합니다.
+     *
+     * <p>각 이벤트의 description을 줄바꿈으로 구분하여 나열합니다.
+     * 중복 description은 제거합니다.</p>
+     */
+    private String buildMergedDescription(List<ChangeEvent> group) {
+        Set<String> seen = new LinkedHashSet<>();
+        for (ChangeEvent event : group) {
+            if (event.getDescription() != null && !event.getDescription().isBlank()) {
+                seen.add(event.getDescription());
+            }
+        }
+        return String.join("\n", seen);
+    }
+    /**
+     * 심각도 순위를 반환합니다 (HIGH=3, MEDIUM=2, LOW=1).
+     */
+    private int severityRank(String severity) {
+        if (severity == null) return 0;
+        return switch (severity) {
+            case "HIGH" -> 3;
+            case "MEDIUM" -> 2;
+            case "LOW" -> 1;
+            default -> 0;
+        };
     }
 
     /**
@@ -437,87 +463,124 @@ public class ChangeEventService {
     }
 
     /**
-     * Git diff 결과에서 코드 변경 이벤트를 커밋 단위로 생성합니다.
+     * Git diff 결과에서 코드 변경 이벤트를 레포지토리 단위로 생성합니다.
      *
-     * <p>커밋 메시지를 기능명으로 사용하고, 변경 파일 목록/레이어/키워드 정보를
-     * description에 포함하여 LLM이 보고서를 작성할 수 있도록 합니다.</p>
+     * <p>같은 레포지토리의 여러 커밋을 하나의 이벤트로 통합하여,
+     * 중복 파일을 제거하고 커밋 이력/레이어/키워드를 구조화합니다.</p>
      */
     private List<ChangeEvent> buildCodeChangeEvents(UUID idAnalysisRequest, UUID idProject,
                                                      List<GitDiffResult> gitResults) {
         List<ChangeEvent> events = new ArrayList<>();
         for (GitDiffResult gitResult : gitResults) {
-            if (gitResult.getCommits() == null) continue;
+            if (gitResult.getCommits() == null || gitResult.getCommits().isEmpty()) continue;
             String repoName = gitResult.getRepositoryName();
-            for (GitDiffResult.CommitInfo commit : gitResult.getCommits()) {
-                if (commit.getFileChanges() == null || commit.getFileChanges().isEmpty()) {
-                    continue;
-                }
-                String description = buildCodeDescription(repoName, commit);
-                events.add(ChangeEvent.builder()
-                        .idAnalysisRequest(idAnalysisRequest)
-                        .idProject(idProject)
-                        .category("CODE_CHANGE")
-                        .title(commit.getMessage())
-                        .description(description)
-                        .severity("LOW")
-                        .confidenceScore(0.8)
-                        .sourceType("GIT")
-                        .correlationKey(repoName)
-                        .build());
-            }
+            // 유효한 커밋만 필터링
+            List<GitDiffResult.CommitInfo> validCommits = gitResult.getCommits().stream()
+                    .filter(c -> c.getFileChanges() != null && !c.getFileChanges().isEmpty())
+                    .toList();
+            if (validCommits.isEmpty()) continue;
+            String description = buildRepoDescription(repoName, validCommits);
+            String title = buildRepoTitle(repoName, validCommits);
+            events.add(ChangeEvent.builder()
+                    .idAnalysisRequest(idAnalysisRequest)
+                    .idProject(idProject)
+                    .category("CODE_CHANGE")
+                    .title(title)
+                    .description(description)
+                    .severity("LOW")
+                    .confidenceScore(0.8)
+                    .sourceType("GIT")
+                    .correlationKey(repoName)
+                    .build());
         }
         return events;
     }
     /**
-     * 커밋의 변경 파일 정보를 기반으로 상세 description을 구성합니다.
-     *
-     * <p>레포지토리명, 작성자, 일시, 변경 레이어, 키워드, 파일별 변경 내역을 포함합니다.</p>
+     * 레포지토리의 커밋 이력을 요약한 제목을 생성합니다.
      */
-    private String buildCodeDescription(String repoName, GitDiffResult.CommitInfo commit) {
-        List<String> filePaths = commit.getFileChanges().stream()
-                .map(GitDiffResult.FileChange::getFilePath)
-                .filter(Objects::nonNull)
-                .toList();
-        Set<String> layers = LayerDetector.detectLayers(filePaths);
-        // 파일별 키워드 수집
+    private String buildRepoTitle(String repoName, List<GitDiffResult.CommitInfo> commits) {
+        if (commits.size() == 1) {
+            return commits.get(0).getMessage();
+        }
+        return repoName + " 코드 변경 (" + commits.size() + "건 커밋)";
+    }
+    /**
+     * 레포지토리의 전체 커밋을 통합하여 중복 제거된 구조화 description을 생성합니다.
+     *
+     * <p>포함 정보: 작성자, 기간, 커밋 이력, 영향 레이어, 키워드,
+     * 변경 타입별 파일 목록(중복 제거)</p>
+     */
+    private String buildRepoDescription(String repoName, List<GitDiffResult.CommitInfo> commits) {
+        Set<String> authors = new LinkedHashSet<>();
+        Map<String, Set<String>> filesByChangeType = new LinkedHashMap<>();
+        Set<String> allFilePaths = new LinkedHashSet<>();
+        List<String> commitSummaries = new ArrayList<>();
+        String earliestDate = null;
+        String latestDate = null;
+        for (GitDiffResult.CommitInfo commit : commits) {
+            authors.add(commit.getAuthorName());
+            // 날짜 범위
+            String dt = commit.getDateTime();
+            if (dt != null) {
+                if (earliestDate == null || dt.compareTo(earliestDate) < 0) earliestDate = dt;
+                if (latestDate == null || dt.compareTo(latestDate) > 0) latestDate = dt;
+            }
+            // 커밋별 요약 (메시지 + 파일 수)
+            int fileCount = commit.getFileChanges().size();
+            commitSummaries.add(commit.getMessage() + " (" + fileCount + "개 파일)");
+            // 파일 수집 (중복 제거)
+            for (GitDiffResult.FileChange fc : commit.getFileChanges()) {
+                String ct = fc.getChangeType() != null ? fc.getChangeType() : "MODIFY";
+                String filePath = fc.getFilePath();
+                if (filePath == null) continue;
+                allFilePaths.add(filePath);
+                filesByChangeType.computeIfAbsent(ct, k -> new LinkedHashSet<>()).add(extractFileName(filePath));
+            }
+        }
+        // 레이어/키워드 분석
+        Set<String> layers = LayerDetector.detectLayers(new ArrayList<>(allFilePaths));
         Map<String, Integer> keywordFreq = new LinkedHashMap<>();
-        for (String fp : filePaths) {
+        for (String fp : allFilePaths) {
             for (String kw : LayerDetector.extractKeywords(fp)) {
                 keywordFreq.merge(kw, 1, Integer::sum);
             }
         }
         List<String> topKeywords = keywordFreq.entrySet().stream()
                 .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
-                .limit(5)
+                .limit(10)
                 .map(Map.Entry::getKey)
                 .toList();
-        // 변경 타입별 파일 그룹핑
-        Map<String, List<String>> byChangeType = new LinkedHashMap<>();
-        for (GitDiffResult.FileChange fc : commit.getFileChanges()) {
-            String ct = fc.getChangeType() != null ? fc.getChangeType() : "MODIFY";
-            String fileName = fc.getFilePath() != null ? extractFileName(fc.getFilePath()) : "unknown";
-            byChangeType.computeIfAbsent(ct, k -> new ArrayList<>()).add(fileName);
-        }
+        // description 조립
         StringBuilder sb = new StringBuilder();
         sb.append("[").append(repoName).append("] ");
-        sb.append("작성자: ").append(commit.getAuthorName());
-        sb.append(", 일시: ").append(commit.getDateTime());
-        sb.append(", 변경 파일 ").append(filePaths.size()).append("개");
+        sb.append("커밋 ").append(commits.size()).append("건");
+        sb.append(", 변경 파일 ").append(allFilePaths.size()).append("개 (중복 제거)");
+        sb.append("\n작성자: ").append(String.join(", ", authors));
+        if (earliestDate != null && latestDate != null) {
+            sb.append(" | 기간: ").append(earliestDate).append(" ~ ").append(latestDate);
+        }
         if (!layers.isEmpty()) {
-            sb.append(" | 영향 레이어: ").append(String.join(", ", layers));
+            sb.append("\n영향 레이어: ").append(String.join(", ", layers));
         }
         if (!topKeywords.isEmpty()) {
-            sb.append(" | 관련 키워드: ").append(String.join(", ", topKeywords));
+            sb.append("\n관련 키워드: ").append(String.join(", ", topKeywords));
         }
-        // 변경 타입별 파일 목록
-        for (Map.Entry<String, List<String>> entry : byChangeType.entrySet()) {
-            sb.append(" | ").append(entry.getKey()).append(": ");
-            List<String> files = entry.getValue();
-            if (files.size() <= 10) {
-                sb.append(String.join(", ", files));
+        // 커밋 이력
+        sb.append("\n\n커밋 이력:");
+        for (String summary : commitSummaries) {
+            sb.append("\n- ").append(summary);
+        }
+        // 변경 타입별 파일 목록 (중복 제거됨)
+        sb.append("\n\n변경 파일 목록:");
+        for (Map.Entry<String, Set<String>> entry : filesByChangeType.entrySet()) {
+            Set<String> files = entry.getValue();
+            sb.append("\n[").append(entry.getKey()).append("] ");
+            List<String> fileList = new ArrayList<>(files);
+            if (fileList.size() <= 15) {
+                sb.append(String.join(", ", fileList));
             } else {
-                sb.append(String.join(", ", files.subList(0, 10)));
-                sb.append(" 외 ").append(files.size() - 10).append("개");
+                sb.append(String.join(", ", fileList.subList(0, 15)));
+                sb.append(" 외 ").append(fileList.size() - 15).append("개");
             }
         }
         return sb.toString();
