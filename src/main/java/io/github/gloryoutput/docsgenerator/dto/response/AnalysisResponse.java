@@ -1,5 +1,6 @@
 package io.github.gloryoutput.docsgenerator.dto.response;
 
+import io.github.gloryoutput.docsgenerator.analyzer.database.DbSchemaResult;
 import io.github.gloryoutput.docsgenerator.analyzer.git.GitDiffResult;
 import io.github.gloryoutput.docsgenerator.domain.analysis.AnalysisRequest;
 import lombok.Builder;
@@ -18,25 +19,28 @@ import java.util.List;
 @Builder
 public class AnalysisResponse {
     private String idAnalysisRequest;
-    private String projectCode;
+    private String idProject;
     private LocalDate startDate;
     private LocalDate endDate;
     private String status;
     private LocalDateTime startedAt;
     private LocalDateTime completedAt;
     private List<GitDiffResult> repositoryResults;
+    private List<DbSchemaResult> schemaResults;
 
-    public static AnalysisResponse from(AnalysisRequest request, String projectCode,
-                                         List<GitDiffResult> results) {
+    public static AnalysisResponse from(AnalysisRequest request,
+                                         List<GitDiffResult> gitResults,
+                                         List<DbSchemaResult> schemaResults) {
         return AnalysisResponse.builder()
                 .idAnalysisRequest(request.getIdAnalysisRequest().toString())
-                .projectCode(projectCode)
+                .idProject(request.getIdProject().toString())
                 .startDate(request.getStartDate())
                 .endDate(request.getEndDate())
                 .status(request.getStatus())
                 .startedAt(request.getStartedAt())
                 .completedAt(request.getCompletedAt())
-                .repositoryResults(results)
+                .repositoryResults(gitResults)
+                .schemaResults(schemaResults)
                 .build();
     }
 }
