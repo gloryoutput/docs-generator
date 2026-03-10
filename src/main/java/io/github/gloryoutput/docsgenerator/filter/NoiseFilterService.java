@@ -135,6 +135,7 @@ public class NoiseFilterService {
 
     /**
      * 단일 GitDiffResult에서 noise 파일 변경을 제거한 복사본을 생성합니다.
+     * 커밋별 파일 변경과 전체 파일 변경 모두 필터링합니다.
      */
     private GitDiffResult filterSingleGitResult(GitDiffResult result) {
         List<GitDiffResult.FileChange> filteredFileChanges = result.getFileChanges() != null
@@ -142,13 +143,37 @@ public class NoiseFilterService {
                         .filter(fc -> !isNoiseFileChange(fc))
                         .collect(Collectors.toList())
                 : Collections.emptyList();
+        // 커밋별 파일 변경도 필터링
+        List<GitDiffResult.CommitInfo> filteredCommits = result.getCommits() != null
+                ? result.getCommits().stream()
+                        .map(this::filterCommitFileChanges)
+                        .collect(Collectors.toList())
+                : Collections.emptyList();
         return GitDiffResult.builder()
                 .repositoryName(result.getRepositoryName())
                 .repositoryUrl(result.getRepositoryUrl())
                 .totalCommits(result.getTotalCommits())
-                .commits(result.getCommits())
+                .commits(filteredCommits)
                 .fileChanges(filteredFileChanges)
                 .error(result.getError())
+                .build();
+    }
+
+    /**
+     * 커밋의 파일 변경 목록에서 noise를 제거한 복사본을 생성합니다.
+     */
+    private GitDiffResult.CommitInfo filterCommitFileChanges(GitDiffResult.CommitInfo commit) {
+        List<GitDiffResult.FileChange> filtered = commit.getFileChanges() != null
+                ? commit.getFileChanges().stream()
+                        .filter(fc -> !isNoiseFileChange(fc))
+                        .collect(Collectors.toList())
+                : Collections.emptyList();
+        return GitDiffResult.CommitInfo.builder()
+                .commitHash(commit.getCommitHash())
+                .authorName(commit.getAuthorName())
+                .message(commit.getMessage())
+                .dateTime(commit.getDateTime())
+                .fileChanges(filtered)
                 .build();
     }
 

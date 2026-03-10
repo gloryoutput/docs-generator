@@ -97,34 +97,39 @@ public class GitAnalyzerService {
                 .setRevFilter(CommitTimeRevFilter.between(since, until))
                 .call();
         List<CommitInfo> commitInfos = new ArrayList<>();
-        // 중복 제거를 위한 Set
+        // 전체 파일 변경 중복 제거를 위한 Set
         Set<String> fileChangeKeys = new LinkedHashSet<>();
         List<FileChange> allFileChanges = new ArrayList<>();
         for (RevCommit commit : commits) {
+            // 각 커밋의 diff 추출
+            List<DiffEntry> diffs = getDiffEntries(repository, commit);
+            List<FileChange> commitFileChanges = new ArrayList<>();
+            for (DiffEntry diff : diffs) {
+                String changeType = diff.getChangeType().name();
+                String filePath = diff.getChangeType() == DiffEntry.ChangeType.DELETE
+                        ? diff.getOldPath() : diff.getNewPath();
+                FileChange.FileChangeBuilder builder = FileChange.builder()
+                        .changeType(changeType)
+                        .filePath(filePath);
+                if (diff.getChangeType() == DiffEntry.ChangeType.RENAME) {
+                    builder.oldPath(diff.getOldPath());
+                }
+                FileChange fileChange = builder.build();
+                commitFileChanges.add(fileChange);
+                // 전체 목록에는 중복 제거하여 추가
+                String key = changeType + ":" + filePath;
+                if (fileChangeKeys.add(key)) {
+                    allFileChanges.add(fileChange);
+                }
+            }
             commitInfos.add(CommitInfo.builder()
                     .commitHash(commit.getName())
                     .authorName(commit.getAuthorIdent().getName())
                     .message(commit.getShortMessage())
                     .dateTime(commit.getAuthorIdent().getWhen().toInstant()
                             .atZone(ZoneId.systemDefault()).toLocalDateTime().format(DT_FORMAT))
+                    .fileChanges(commitFileChanges)
                     .build());
-            // 각 커밋의 diff 추출
-            List<DiffEntry> diffs = getDiffEntries(repository, commit);
-            for (DiffEntry diff : diffs) {
-                String changeType = diff.getChangeType().name();
-                String filePath = diff.getChangeType() == DiffEntry.ChangeType.DELETE
-                        ? diff.getOldPath() : diff.getNewPath();
-                String key = changeType + ":" + filePath;
-                if (fileChangeKeys.add(key)) {
-                    FileChange.FileChangeBuilder builder = FileChange.builder()
-                            .changeType(changeType)
-                            .filePath(filePath);
-                    if (diff.getChangeType() == DiffEntry.ChangeType.RENAME) {
-                        builder.oldPath(diff.getOldPath());
-                    }
-                    allFileChanges.add(builder.build());
-                }
-            }
         }
         return GitDiffResult.builder()
                 .repositoryName(repoName)

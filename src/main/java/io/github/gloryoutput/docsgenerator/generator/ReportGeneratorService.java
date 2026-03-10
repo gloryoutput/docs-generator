@@ -101,7 +101,7 @@ public class ReportGeneratorService {
     private String buildImpactScope(List<CorrelatedGroup> groups) {
         Set<String> tables = new LinkedHashSet<>();
         Set<String> endpoints = new LinkedHashSet<>();
-        Set<String> codeModules = new LinkedHashSet<>();
+        Set<String> repositories = new LinkedHashSet<>();
         for (CorrelatedGroup group : groups) {
             if (group.getEvents() == null) continue;
             for (ChangeEvent event : group.getEvents()) {
@@ -118,7 +118,7 @@ public class ReportGeneratorService {
                         break;
                     case "CODE_CHANGE":
                         if (event.getCorrelationKey() != null) {
-                            codeModules.add(event.getCorrelationKey());
+                            repositories.add(event.getCorrelationKey());
                         }
                         break;
                     default:
@@ -137,9 +137,9 @@ public class ReportGeneratorService {
             endpoints.forEach(e -> scope.append("- ").append(e).append("\n"));
             scope.append("\n");
         }
-        if (!codeModules.isEmpty()) {
-            scope.append("**영향받는 코드 모듈:**\n");
-            codeModules.forEach(m -> scope.append("- ").append(m).append("\n"));
+        if (!repositories.isEmpty()) {
+            scope.append("**영향받는 레포지토리:**\n");
+            repositories.forEach(r -> scope.append("- ").append(r).append("\n"));
             scope.append("\n");
         }
         if (scope.length() == 0) {

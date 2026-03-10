@@ -10,7 +10,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * 분석 결과로부터 변경 이벤트를 생성하는 서비스
@@ -172,32 +171,39 @@ public class ChangeEventService {
     }
 
     /**
-     * Git diff 결과에서 코드 변경 이벤트를 디렉토리 단위로 그룹핑하여 생성합니다.
+     * Git diff 결과에서 코드 변경 이벤트를 커밋 단위로 생성합니다.
+     *
+     * <p>커밋 메시지를 기능명으로 사용하여 파일 단위가 아닌 이벤트 단위로 보고서를 작성합니다.
+     * noise 필터링 후 변경 파일이 없는 커밋은 건너뜁니다.</p>
      */
     private List<ChangeEvent> buildCodeChangeEvents(UUID idAnalysisRequest, UUID idProject,
                                                      List<GitDiffResult> gitResults) {
-        // 모든 파일 변경을 디렉토리 기준으로 그룹핑
-        Map<String, List<GitDiffResult.FileChange>> directoryGroups = new LinkedHashMap<>();
+        List<ChangeEvent> events = new ArrayList<>();
         for (GitDiffResult gitResult : gitResults) {
-            if (gitResult.getFileChanges() == null) continue;
-            for (GitDiffResult.FileChange fileChange : gitResult.getFileChanges()) {
-                String directory = extractDirectory(fileChange.getFilePath());
-                directoryGroups.computeIfAbsent(directory, k -> new ArrayList<>()).add(fileChange);
-            }
-        }
-        return directoryGroups.entrySet().stream()
-                .map(entry -> ChangeEvent.builder()
+            if (gitResult.getCommits() == null) continue;
+            String repoName = gitResult.getRepositoryName();
+            for (GitDiffResult.CommitInfo commit : gitResult.getCommits()) {
+                // noise 필터링 후 변경 파일이 없으면 건너뜀
+                if (commit.getFileChanges() == null || commit.getFileChanges().isEmpty()) {
+                    continue;
+                }
+                int fileCount = commit.getFileChanges().size();
+                events.add(ChangeEvent.builder()
                         .idAnalysisRequest(idAnalysisRequest)
                         .idProject(idProject)
                         .category("CODE_CHANGE")
-                        .title("코드 변경: " + entry.getKey() + " (" + entry.getValue().size() + "개 파일)")
-                        .description("디렉토리 '" + entry.getKey() + "'에서 " + entry.getValue().size() + "개 파일이 변경되었습니다.")
+                        .title(commit.getMessage())
+                        .description(repoName + " 레포지토리에서 " + fileCount
+                                + "개 파일이 변경되었습니다. (작성자: " + commit.getAuthorName()
+                                + ", " + commit.getDateTime() + ")")
                         .severity("LOW")
                         .confidenceScore(0.8)
                         .sourceType("GIT")
-                        .correlationKey(entry.getKey())
-                        .build())
-                .collect(Collectors.toList());
+                        .correlationKey(repoName)
+                        .build());
+            }
+        }
+        return events;
     }
 
     /**
@@ -219,16 +225,4 @@ public class ChangeEventService {
         return prefix.length() > 0 ? prefix.toString() : path;
     }
 
-    /**
-     * 파일 경로에서 디렉토리(처음 2개 경로 세그먼트)를 추출합니다.
-     */
-    private String extractDirectory(String filePath) {
-        if (filePath == null) return "unknown";
-        String normalized = filePath.replace("\\", "/");
-        String[] segments = normalized.split("/");
-        if (segments.length <= 2) {
-            return normalized;
-        }
-        return segments[0] + "/" + segments[1];
-    }
 }

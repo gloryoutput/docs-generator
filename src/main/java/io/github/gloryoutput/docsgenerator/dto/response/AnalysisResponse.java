@@ -4,6 +4,7 @@ import io.github.gloryoutput.docsgenerator.analyzer.api.ApiAnalyzerResult;
 import io.github.gloryoutput.docsgenerator.analyzer.database.DbSchemaResult;
 import io.github.gloryoutput.docsgenerator.analyzer.git.GitDiffResult;
 import io.github.gloryoutput.docsgenerator.domain.analysis.AnalysisRequest;
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import lombok.Builder;
 import lombok.Getter;
 import java.time.LocalDate;
@@ -18,6 +19,8 @@ import java.util.List;
  */
 @Getter
 @Builder
+@JsonPropertyOrder({"idAnalysisRequest", "idProject", "startDate", "endDate",
+        "status", "startedAt", "completedAt", "repositoryResults", "schemaResults", "apiResult"})
 public class AnalysisResponse {
     private String idAnalysisRequest;
     private String idProject;

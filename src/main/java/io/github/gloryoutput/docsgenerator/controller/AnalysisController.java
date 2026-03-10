@@ -7,12 +7,19 @@ import io.github.gloryoutput.docsgenerator.dto.response.AnalysisResponse;
 import io.github.gloryoutput.docsgenerator.dto.response.ApiResponse;
 import io.github.gloryoutput.docsgenerator.dto.response.EvidenceResponse;
 import io.github.gloryoutput.docsgenerator.dto.response.ReportResponse;
+import io.github.gloryoutput.docsgenerator.generator.DocxConverterService;
 import io.github.gloryoutput.docsgenerator.service.AnalysisService;
 import io.github.gloryoutput.docsgenerator.service.EvidenceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 
@@ -32,6 +39,7 @@ public class AnalysisController {
     private final AnalysisService analysisService;
     private final EvidenceService evidenceService;
     private final ReportRepository reportRepository;
+    private final DocxConverterService docxConverterService;
 
     /**
      * 분석을 요청합니다.
@@ -74,5 +82,42 @@ public class AnalysisController {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "보고서를 찾을 수 없습니다: " + idAnalysisRequest));
         return ApiResponse.ok(ReportResponse.from(report));
+    }
+
+    /**
+     * 보고서를 파일로 다운로드합니다.
+     *
+     * @param idAnalysisRequest 분석 요청 ID
+     * @param format 파일 형식 (docx 또는 md, 기본값: docx)
+     * @return 파일 바이너리 응답
+     */
+    @GetMapping("/{idAnalysisRequest}/report/download")
+    @Operation(summary = "보고서 다운로드", description = "분석 요청 ID로 생성된 보고서를 파일로 다운로드합니다 (format: docx, md)")
+    public ResponseEntity<byte[]> downloadReport(
+            @PathVariable String idAnalysisRequest,
+            @RequestParam(defaultValue = "docx") String format) throws IOException {
+        UUID analysisId = UUID.fromString(idAnalysisRequest);
+        Report report = reportRepository.findByIdAnalysisRequestAndIsDeletedFalse(analysisId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "보고서를 찾을 수 없습니다: " + idAnalysisRequest));
+        byte[] fileBytes;
+        String extension;
+        MediaType contentType;
+        if ("md".equalsIgnoreCase(format)) {
+            fileBytes = report.getReportContent().getBytes(StandardCharsets.UTF_8);
+            extension = ".md";
+            contentType = MediaType.TEXT_MARKDOWN;
+        } else {
+            fileBytes = docxConverterService.convertToDocx(report.getReportContent());
+            extension = ".docx";
+            contentType = MediaType.valueOf("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        }
+        String fileName = URLEncoder.encode("보고서_" + idAnalysisRequest + extension, StandardCharsets.UTF_8)
+                .replace("+", "%20");
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + fileName)
+                .contentType(contentType)
+                .contentLength(fileBytes.length)
+                .body(fileBytes);
     }
 }

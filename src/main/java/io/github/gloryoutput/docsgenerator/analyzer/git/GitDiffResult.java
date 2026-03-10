@@ -28,6 +28,8 @@ public class GitDiffResult {
         private String authorName;
         private String message;
         private String dateTime;
+        /** 이 커밋에서 변경된 파일 목록 */
+        private List<FileChange> fileChanges;
     }
 
     @Getter
