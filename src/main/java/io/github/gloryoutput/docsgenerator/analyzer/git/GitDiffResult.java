@@ -39,5 +39,11 @@ public class GitDiffResult {
         private String changeType;
         private String filePath;
         private String oldPath;
+        /** 추가된 라인 수 */
+        private int addedLines;
+        /** 삭제된 라인 수 */
+        private int deletedLines;
+        /** 서비스/클래스 단위 변경 요약 (새 클래스, 필드 추가, 메서드 추가 등) */
+        private String changeSummary;
     }
 }

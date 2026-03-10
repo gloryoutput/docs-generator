@@ -514,7 +514,6 @@ public class ChangeEventService {
         Set<String> authors = new LinkedHashSet<>();
         Map<String, Set<String>> filesByChangeType = new LinkedHashMap<>();
         Set<String> allFilePaths = new LinkedHashSet<>();
-        List<String> commitSummaries = new ArrayList<>();
         String earliestDate = null;
         String latestDate = null;
         for (GitDiffResult.CommitInfo commit : commits) {
@@ -525,14 +524,11 @@ public class ChangeEventService {
                 if (earliestDate == null || dt.compareTo(earliestDate) < 0) earliestDate = dt;
                 if (latestDate == null || dt.compareTo(latestDate) > 0) latestDate = dt;
             }
-            // 커밋별 요약 (메시지 + 파일 수)
-            int fileCount = commit.getFileChanges().size();
-            commitSummaries.add(commit.getMessage() + " (" + fileCount + "개 파일)");
             // 파일 수집 (중복 제거)
             for (GitDiffResult.FileChange fc : commit.getFileChanges()) {
                 String ct = fc.getChangeType() != null ? fc.getChangeType() : "MODIFY";
                 String filePath = fc.getFilePath();
-                if (filePath == null) continue;
+                if (filePath == null || isGeneratedFile(filePath)) continue;
                 allFilePaths.add(filePath);
                 filesByChangeType.computeIfAbsent(ct, k -> new LinkedHashSet<>()).add(extractFileName(filePath));
             }
@@ -565,11 +561,6 @@ public class ChangeEventService {
         if (!topKeywords.isEmpty()) {
             sb.append("\n관련 키워드: ").append(String.join(", ", topKeywords));
         }
-        // 커밋 이력
-        sb.append("\n\n커밋 이력:");
-        for (String summary : commitSummaries) {
-            sb.append("\n- ").append(summary);
-        }
         // 변경 타입별 파일 목록 (중복 제거됨)
         sb.append("\n\n변경 파일 목록:");
         for (Map.Entry<String, Set<String>> entry : filesByChangeType.entrySet()) {
@@ -583,7 +574,41 @@ public class ChangeEventService {
                 sb.append(" 외 ").append(fileList.size() - 15).append("개");
             }
         }
+        // 서비스 단위 변경 상세 (changeSummary가 있는 파일만)
+        List<String> changeSummaries = new ArrayList<>();
+        Set<String> processedFiles = new HashSet<>();
+        for (GitDiffResult.CommitInfo commit : commits) {
+            for (GitDiffResult.FileChange fc : commit.getFileChanges()) {
+                if (fc.getChangeSummary() != null && !fc.getChangeSummary().isEmpty()
+                        && fc.getFilePath() != null && !isGeneratedFile(fc.getFilePath())
+                        && processedFiles.add(fc.getFilePath())) {
+                    String fileName = extractFileName(fc.getFilePath());
+                    String summary = fileName + ": " + fc.getChangeSummary();
+                    if (fc.getAddedLines() > 0 || fc.getDeletedLines() > 0) {
+                        summary += " (+" + fc.getAddedLines() + "/-" + fc.getDeletedLines() + ")";
+                    }
+                    changeSummaries.add(summary);
+                }
+            }
+        }
+        if (!changeSummaries.isEmpty()) {
+            sb.append("\n\n변경 상세:");
+            for (String summary : changeSummaries) {
+                sb.append("\n- ").append(summary);
+            }
+        }
         return sb.toString();
+    }
+    /**
+     * QueryDSL Q클래스 등 자동 생성 파일을 판별합니다.
+     */
+    private boolean isGeneratedFile(String filePath) {
+        String fileName = extractFileName(filePath);
+        // QueryDSL Q클래스: Q로 시작하고 대문자가 이어지는 Java 파일
+        if (fileName.matches("Q[A-Z].*\\.java")) return true;
+        // generated-sources, build/generated 등 자동 생성 경로
+        String normalized = filePath.replace('\\', '/');
+        return normalized.contains("/generated/") || normalized.contains("/generated-sources/");
     }
     /**
      * 파일 경로에서 파일명만 추출합니다.
