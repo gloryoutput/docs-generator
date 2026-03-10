@@ -44,3 +44,6 @@ deploy/.env.*
 .claude
 CLAUDE.md
 prompt.md
+
+### LLM Prompts ###
+llm-prompts/

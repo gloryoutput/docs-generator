@@ -26,6 +26,7 @@ import io.github.gloryoutput.docsgenerator.dto.response.AnalysisResponse;
 import io.github.gloryoutput.docsgenerator.filter.NoiseFilterService;
 import io.github.gloryoutput.docsgenerator.generator.DraftGeneratorService;
 import io.github.gloryoutput.docsgenerator.generator.ReportGeneratorService;
+import io.github.gloryoutput.docsgenerator.summarizer.LlmSummarizerService;
 import io.github.gloryoutput.docsgenerator.util.EncryptionUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -66,6 +67,7 @@ public class AnalysisService {
     private final CorrelationService correlationService;
     private final DraftGeneratorService draftGeneratorService;
     private final ReportGeneratorService reportGeneratorService;
+    private final LlmSummarizerService llmSummarizerService;
     private final DataSource dataSource;
     @Value("${app.encryption.key:docs-generator-default-key-32ch}")
     private String encryptionKey;
@@ -137,8 +139,10 @@ public class AnalysisService {
         List<CorrelatedGroup> groups = correlationService.correlateEvents(changeEvents);
         // 초안 생성 (Step 10)
         String draft = draftGeneratorService.generateDraft(groups);
+        // LLM 요약 - 초안 문장 다듬기 (Step 10.5)
+        String polishedDraft = llmSummarizerService.summarize(groups, draft);
         // 최종 보고서 생성 및 저장 (Step 11)
-        reportGeneratorService.generateAndSave(analysisRequest, project.getProjectName(), groups, draft);
+        reportGeneratorService.generateAndSave(analysisRequest, project.getProjectName(), groups, polishedDraft);
         analysisRequest.complete();
         analysisRequestRepository.save(analysisRequest);
         return AnalysisResponse.from(analysisRequest, filteredGitResults, filteredSchemaResults, filteredApiResult);

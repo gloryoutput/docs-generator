@@ -6,6 +6,12 @@ spring:
 app:
   encryption:
     key: ${ENCRYPTION_KEY:docs-generator-default-key-32ch}
+  llm:
+    enabled: ${LLM_ENABLED:false}
+    provider: ${LLM_PROVIDER:openai}
+    api-url: ${LLM_API_URL:}
+    api-key: ${LLM_API_KEY:}
+    model: ${LLM_MODEL:gpt-4o-mini}
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
@@ -34,10 +40,7 @@ spring:
   jpa:
     hibernate:
       ddl-auto: create-drop
-    show-sql: true
-    properties:
-      hibernate:
-        format_sql: true
+    show-sql: false
 
 ---
 # 로컬 MySQL 환경
@@ -53,10 +56,7 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
-    properties:
-      hibernate:
-        format_sql: true
+    show-sql: false
 
 ---
 # 운영 환경: MySQL
