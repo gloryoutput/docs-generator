@@ -1,5 +1,6 @@
 package io.github.gloryoutput.docsgenerator.dto.response;
 
+import io.github.gloryoutput.docsgenerator.analyzer.api.ApiAnalyzerResult;
 import io.github.gloryoutput.docsgenerator.analyzer.database.DbSchemaResult;
 import io.github.gloryoutput.docsgenerator.analyzer.git.GitDiffResult;
 import io.github.gloryoutput.docsgenerator.domain.analysis.AnalysisRequest;
@@ -27,10 +28,12 @@ public class AnalysisResponse {
     private LocalDateTime completedAt;
     private List<GitDiffResult> repositoryResults;
     private List<DbSchemaResult> schemaResults;
+    private ApiAnalyzerResult apiResult;
 
     public static AnalysisResponse from(AnalysisRequest request,
                                          List<GitDiffResult> gitResults,
-                                         List<DbSchemaResult> schemaResults) {
+                                         List<DbSchemaResult> schemaResults,
+                                         ApiAnalyzerResult apiResult) {
         return AnalysisResponse.builder()
                 .idAnalysisRequest(request.getIdAnalysisRequest().toString())
                 .idProject(request.getIdProject().toString())
@@ -41,6 +44,7 @@ public class AnalysisResponse {
                 .completedAt(request.getCompletedAt())
                 .repositoryResults(gitResults)
                 .schemaResults(schemaResults)
+                .apiResult(apiResult)
                 .build();
     }
 }

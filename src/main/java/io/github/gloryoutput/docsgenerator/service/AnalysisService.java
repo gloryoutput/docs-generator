@@ -1,11 +1,18 @@
 package io.github.gloryoutput.docsgenerator.service;
 
+import io.github.gloryoutput.docsgenerator.analyzer.api.ApiAnalyzerResult;
+import io.github.gloryoutput.docsgenerator.analyzer.api.ApiAnalyzerService;
 import io.github.gloryoutput.docsgenerator.analyzer.database.DbSchemaAnalyzerService;
 import io.github.gloryoutput.docsgenerator.analyzer.database.DbSchemaResult;
 import io.github.gloryoutput.docsgenerator.analyzer.git.GitAnalyzerService;
 import io.github.gloryoutput.docsgenerator.analyzer.git.GitDiffResult;
+import io.github.gloryoutput.docsgenerator.correlation.CorrelatedGroup;
+import io.github.gloryoutput.docsgenerator.correlation.CorrelationService;
 import io.github.gloryoutput.docsgenerator.domain.analysis.AnalysisRequest;
 import io.github.gloryoutput.docsgenerator.domain.analysis.AnalysisRequestRepository;
+import io.github.gloryoutput.docsgenerator.domain.api.ApiSnapshot;
+import io.github.gloryoutput.docsgenerator.domain.api.ApiSnapshotRepository;
+import io.github.gloryoutput.docsgenerator.domain.changeevent.ChangeEvent;
 import io.github.gloryoutput.docsgenerator.domain.database.SchemaSnapshot;
 import io.github.gloryoutput.docsgenerator.domain.database.SchemaSnapshotRepository;
 import io.github.gloryoutput.docsgenerator.domain.project.Project;
@@ -16,6 +23,9 @@ import io.github.gloryoutput.docsgenerator.domain.repositorymap.RepositoryCreden
 import io.github.gloryoutput.docsgenerator.domain.repositorymap.RepositoryCredentialRepository;
 import io.github.gloryoutput.docsgenerator.dto.request.AnalysisCreateRequest;
 import io.github.gloryoutput.docsgenerator.dto.response.AnalysisResponse;
+import io.github.gloryoutput.docsgenerator.filter.NoiseFilterService;
+import io.github.gloryoutput.docsgenerator.generator.DraftGeneratorService;
+import io.github.gloryoutput.docsgenerator.generator.ReportGeneratorService;
 import io.github.gloryoutput.docsgenerator.util.EncryptionUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -46,8 +56,16 @@ public class AnalysisService {
     private final ProjectRepositoryMapRepository repositoryMapRepository;
     private final RepositoryCredentialRepository credentialRepository;
     private final SchemaSnapshotRepository schemaSnapshotRepository;
+    private final ApiSnapshotRepository apiSnapshotRepository;
     private final GitAnalyzerService gitAnalyzerService;
     private final DbSchemaAnalyzerService dbSchemaAnalyzerService;
+    private final ApiAnalyzerService apiAnalyzerService;
+    private final EvidenceService evidenceService;
+    private final NoiseFilterService noiseFilterService;
+    private final ChangeEventService changeEventService;
+    private final CorrelationService correlationService;
+    private final DraftGeneratorService draftGeneratorService;
+    private final ReportGeneratorService reportGeneratorService;
     private final DataSource dataSource;
     @Value("${app.encryption.key:docs-generator-default-key-32ch}")
     private String encryptionKey;
@@ -95,9 +113,35 @@ public class AnalysisService {
         // 앱 DataSource로 DB 스키마 분석 수행
         DbSchemaResult schemaResult = analyzeDbSchema(project, analysisRequest);
         List<DbSchemaResult> schemaResults = schemaResult != null ? List.of(schemaResult) : List.of();
+        // API endpoint 분석 수행
+        ApiAnalyzerResult apiResult = analyzeApi(project, analysisRequest);
+        // Noise 필터링 적용
+        List<GitDiffResult> filteredGitResults = noiseFilterService.filterGitChanges(gitResults);
+        List<DbSchemaResult> filteredSchemaResults = noiseFilterService.filterSchemaChanges(schemaResults);
+        ApiAnalyzerResult filteredApiResult = noiseFilterService.filterApiChanges(apiResult);
+        // 필터링된 결과를 Evidence로 저장
+        evidenceService.saveEvidencesFromAnalysis(
+                analysisRequest.getIdAnalysisRequest(),
+                project.getIdProject(),
+                filteredGitResults,
+                filteredSchemaResults,
+                filteredApiResult);
+        // 변경 이벤트 생성 (Step 8)
+        List<ChangeEvent> changeEvents = changeEventService.buildChangeEvents(
+                analysisRequest.getIdAnalysisRequest(),
+                project.getIdProject(),
+                filteredGitResults,
+                filteredSchemaResults,
+                filteredApiResult);
+        // 상관관계 분석 (Step 9)
+        List<CorrelatedGroup> groups = correlationService.correlateEvents(changeEvents);
+        // 초안 생성 (Step 10)
+        String draft = draftGeneratorService.generateDraft(groups);
+        // 최종 보고서 생성 및 저장 (Step 11)
+        reportGeneratorService.generateAndSave(analysisRequest, project.getProjectName(), groups, draft);
         analysisRequest.complete();
         analysisRequestRepository.save(analysisRequest);
-        return AnalysisResponse.from(analysisRequest, gitResults, schemaResults);
+        return AnalysisResponse.from(analysisRequest, filteredGitResults, filteredSchemaResults, filteredApiResult);
     }
 
     /**
@@ -116,6 +160,26 @@ public class AnalysisService {
                     .snapshotJson(currentJson)
                     .build();
             schemaSnapshotRepository.save(snapshot);
+        }
+        return result;
+    }
+
+    /**
+     * API endpoint를 분석합니다.
+     */
+    private ApiAnalyzerResult analyzeApi(Project project, AnalysisRequest analysisRequest) {
+        Optional<ApiSnapshot> previousSnapshot =
+                apiSnapshotRepository.findTopByIdProjectOrderByCapturedAtDesc(project.getIdProject());
+        String previousJson = previousSnapshot.map(ApiSnapshot::getSnapshotJson).orElse(null);
+        ApiAnalyzerResult result = apiAnalyzerService.analyze(previousJson);
+        if (result != null) {
+            String currentJson = apiAnalyzerService.captureSnapshotJson();
+            ApiSnapshot snapshot = ApiSnapshot.builder()
+                    .idProject(project.getIdProject())
+                    .idAnalysisRequest(analysisRequest.getIdAnalysisRequest())
+                    .snapshotJson(currentJson)
+                    .build();
+            apiSnapshotRepository.save(snapshot);
         }
         return result;
     }
