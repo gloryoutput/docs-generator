@@ -22,7 +22,7 @@ class ProjectRepositoryMapRepositoryTest {
     private ProjectRepositoryMapRepository repositoryMapRepository;
     @Autowired
     private ProjectRepository projectRepository;
-    private String projectUuid;
+    private String idProject;
 
     @BeforeEach
     void setUp() {
@@ -31,7 +31,7 @@ class ProjectRepositoryMapRepositoryTest {
                 .projectName("매핑 테스트 프로젝트")
                 .build();
         Project saved = projectRepository.save(project);
-        this.projectUuid = saved.getUuidProject();
+        this.idProject = saved.getIdProject();
     }
 
     @Test
@@ -39,7 +39,7 @@ class ProjectRepositoryMapRepositoryTest {
     void createAndFind() {
         // given
         ProjectRepositoryMap map = ProjectRepositoryMap.builder()
-                .projectUuid(projectUuid)
+                .idProject(idProject)
                 .repositoryName("api-server")
                 .repositoryUrl("https://github.com/example/api-server.git")
                 .defaultBranch("main")
@@ -48,7 +48,7 @@ class ProjectRepositoryMapRepositoryTest {
         // when
         ProjectRepositoryMap saved = repositoryMapRepository.save(map);
         // then
-        assertThat(saved.getUuidProjectRepositoryMap()).isNotNull();
+        assertThat(saved.getIdProjectRepositoryMap()).isNotNull();
         assertThat(saved.getRepositoryName()).isEqualTo("api-server");
         assertThat(saved.getRepositoryUrl()).isEqualTo("https://github.com/example/api-server.git");
         assertThat(saved.getDefaultBranch()).isEqualTo("main");
@@ -61,28 +61,28 @@ class ProjectRepositoryMapRepositoryTest {
     void multipleRepositories() {
         // given
         repositoryMapRepository.save(ProjectRepositoryMap.builder()
-                .projectUuid(projectUuid)
+                .idProject(idProject)
                 .repositoryName("api-server")
                 .repositoryUrl("https://github.com/example/api-server.git")
                 .defaultBranch("main")
                 .priorityOrder(1)
                 .build());
         repositoryMapRepository.save(ProjectRepositoryMap.builder()
-                .projectUuid(projectUuid)
+                .idProject(idProject)
                 .repositoryName("admin-server")
                 .repositoryUrl("https://github.com/example/admin-server.git")
                 .defaultBranch("develop")
                 .priorityOrder(2)
                 .build());
         repositoryMapRepository.save(ProjectRepositoryMap.builder()
-                .projectUuid(projectUuid)
+                .idProject(idProject)
                 .repositoryName("common-lib")
                 .repositoryUrl("https://github.com/example/common-lib.git")
                 .defaultBranch("main")
                 .priorityOrder(3)
                 .build());
         // when
-        List<ProjectRepositoryMap> maps = repositoryMapRepository.findByProjectUuidAndIsDeletedFalse(projectUuid);
+        List<ProjectRepositoryMap> maps = repositoryMapRepository.findByIdProjectAndIsDeletedFalse(idProject);
         // then
         assertThat(maps).hasSize(3);
         assertThat(maps).extracting(ProjectRepositoryMap::getRepositoryName)
@@ -94,7 +94,7 @@ class ProjectRepositoryMapRepositoryTest {
     void softDeletedExcluded() {
         // given
         ProjectRepositoryMap map = ProjectRepositoryMap.builder()
-                .projectUuid(projectUuid)
+                .idProject(idProject)
                 .repositoryName("deleted-repo")
                 .repositoryUrl("https://github.com/example/deleted.git")
                 .build();
@@ -102,7 +102,7 @@ class ProjectRepositoryMapRepositoryTest {
         saved.softDelete();
         repositoryMapRepository.save(saved);
         // when
-        List<ProjectRepositoryMap> maps = repositoryMapRepository.findByProjectUuidAndIsDeletedFalse(projectUuid);
+        List<ProjectRepositoryMap> maps = repositoryMapRepository.findByIdProjectAndIsDeletedFalse(idProject);
         // then
         assertThat(maps).isEmpty();
     }

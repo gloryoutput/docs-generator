@@ -10,5 +10,5 @@ import java.util.List;
  * @since 1.0.0
  */
 public interface ProjectRepositoryMapRepository extends JpaRepository<ProjectRepositoryMap, String> {
-    List<ProjectRepositoryMap> findByProjectUuidAndIsDeletedFalse(String projectUuid);
+    List<ProjectRepositoryMap> findByIdProjectAndIsDeletedFalse(String idProject);
 }

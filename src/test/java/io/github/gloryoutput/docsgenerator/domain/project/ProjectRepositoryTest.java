@@ -29,7 +29,7 @@ class ProjectRepositoryTest {
                 .build();
         // when
         Project saved = projectRepository.save(project);
-        Optional<Project> found = projectRepository.findById(saved.getUuidProject());
+        Optional<Project> found = projectRepository.findById(saved.getIdProject());
         // then
         assertThat(found).isPresent();
         assertThat(found.get().getProjectCode()).isEqualTo("PRJ001");
@@ -79,8 +79,8 @@ class ProjectRepositoryTest {
                 .build();
         Project saved = projectRepository.save(project);
         // when
-        projectRepository.deleteById(saved.getUuidProject());
-        Optional<Project> found = projectRepository.findById(saved.getUuidProject());
+        projectRepository.deleteById(saved.getIdProject());
+        Optional<Project> found = projectRepository.findById(saved.getIdProject());
         // then
         assertThat(found).isEmpty();
     }
@@ -97,7 +97,7 @@ class ProjectRepositoryTest {
         // when
         saved.softDelete();
         projectRepository.save(saved);
-        Optional<Project> found = projectRepository.findById(saved.getUuidProject());
+        Optional<Project> found = projectRepository.findById(saved.getIdProject());
         // then
         assertThat(found).isPresent();
         assertThat(found.get().getIsDeleted()).isTrue();

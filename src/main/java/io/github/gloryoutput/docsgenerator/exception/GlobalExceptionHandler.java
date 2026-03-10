@@ -74,9 +74,10 @@ public class GlobalExceptionHandler {
     /** 서버 내부 오류 (500) */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleException(Exception ex, HttpServletRequest request) {
+        ex.printStackTrace();
         ErrorInfo error = ErrorInfo.builder()
                 .code("COMMON_INTERNAL")
-                .message("서버 내부 오류가 발생했습니다")
+                .message("서버 내부 오류가 발생했습니다: " + ex.getMessage())
                 .path(request.getRequestURI())
                 .build();
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ApiResponse.fail(error));

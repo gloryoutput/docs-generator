@@ -22,10 +22,10 @@ import java.util.UUID;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class ProjectRepositoryMap extends BaseEntity {
     @Id
-    @Column(name = "uuid_project_repository_map", nullable = false, updatable = false, length = 36)
-    private String uuidProjectRepositoryMap;
-    @Column(name = "project_uuid", nullable = false, length = 36)
-    private String projectUuid;
+    @Column(name = "id_project_repository_map", nullable = false, updatable = false, length = 36)
+    private String idProjectRepositoryMap;
+    @Column(name = "id_project", nullable = false, length = 36)
+    private String idProject;
     @Column(name = "repository_name", nullable = false)
     private String repositoryName;
     @Column(name = "repository_url", nullable = false)
@@ -38,10 +38,10 @@ public class ProjectRepositoryMap extends BaseEntity {
     private Boolean active = true;
 
     @Builder
-    public ProjectRepositoryMap(String projectUuid, String repositoryName,
+    public ProjectRepositoryMap(String idProject, String repositoryName,
                                  String repositoryUrl, String defaultBranch, Integer priorityOrder) {
-        this.uuidProjectRepositoryMap = UUID.randomUUID().toString();
-        this.projectUuid = projectUuid;
+        this.idProjectRepositoryMap = UUID.randomUUID().toString();
+        this.idProject = idProject;
         this.repositoryName = repositoryName;
         this.repositoryUrl = repositoryUrl;
         this.defaultBranch = defaultBranch != null ? defaultBranch : "main";

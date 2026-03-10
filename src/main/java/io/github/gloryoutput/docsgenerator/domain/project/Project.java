@@ -23,8 +23,8 @@ import java.util.UUID;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Project extends BaseEntity {
     @Id
-    @Column(name = "uuid_project", nullable = false, updatable = false, length = 36)
-    private String uuidProject;
+    @Column(name = "id_project", nullable = false, updatable = false, length = 36)
+    private String idProject;
     @Column(name = "project_code", nullable = false, unique = true)
     private String projectCode;
     @Column(name = "project_name", nullable = false)
@@ -34,7 +34,7 @@ public class Project extends BaseEntity {
 
     @Builder
     public Project(String projectCode, String projectName) {
-        this.uuidProject = UUID.randomUUID().toString();
+        this.idProject = UUID.randomUUID().toString();
         this.projectCode = projectCode;
         this.projectName = projectName;
         this.active = true;
