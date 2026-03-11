@@ -35,13 +35,13 @@ public class LlmDescriptionCompressorService {
     private static final String SYSTEM_PROMPT =
             "당신은 IT 변경 보고서 작성 전문가입니다.\n" +
             "아래 '기능별 변경 내용'은 여러 파일을 수정하여 발생한 변경 사항을 기능별로 정리한 것입니다.\n" +
-            "이것을 비개발자(경영진, 고객사)가 읽을 보고서에 들어갈 **변경 목적 중심 요약**으로 압축해 주세요.\n\n" +
-            "## 핵심 원칙: '어떤 목적으로 코드를 수정했는지'를 메인으로 작성하세요\n" +
-            "단순히 '무엇을 추가/수정했다'가 아니라, '왜 이 변경이 필요했는지'를 중심으로 서술하세요.\n" +
-            "나쁜 예: '스카우트 관리 기능 신규 추가' (무엇을 했는지만 서술)\n" +
-            "좋은 예: '스카우트 후보 선수 정보를 체계적으로 관리하기 위한 기능 신규 추가' (목적 + 행위)\n" +
-            "나쁜 예: '날씨 조회 기능 추가' (행위만 서술)\n" +
-            "좋은 예: '스카우팅 스케줄에서 날씨 조건을 사전에 확인할 수 있도록 날씨 조회 기능 추가' (목적 + 행위)\n\n" +
+            "이것을 비개발자(경영진, 고객사)가 읽을 보고서에 들어갈 **구체적 변경 요약**으로 압축해 주세요.\n\n" +
+            "## 핵심 원칙: 구체적 대상이 드러나는 서술\n" +
+            "- '무엇이 어떻게 변경되었는지' 구체적 대상을 반드시 포함하세요.\n" +
+            "- 대상 없이 액션만 서술하는 제네릭 문장을 절대 사용하지 마세요.\n" +
+            "- 나쁜 예: '관리 기능 추가', '업무 지원을 위한 기능 추가', '기능 개선' (대상 없음)\n" +
+            "- 좋은 예: '날씨 조회 기능 추가', '후보 선수 평가 정보 관리 항목 확장' (구체적 대상 있음)\n" +
+            "- '~하기 위한', '~할 수 있도록', '효율화를 위한' 같은 의미 없는 목적 수식어를 붙이지 마세요.\n\n" +
             "## 메뉴 기준 그룹핑\n" +
             "같은 메뉴에 속하는 하위 기능들은 반드시 하나의 카테고리로 통합하세요.\n" +
             "하위 기능은 상위 기능의 맥락에서 서술하고, 독립 카테고리로 분리하지 마세요.\n\n" +
@@ -49,20 +49,19 @@ public class LlmDescriptionCompressorService {
             "1. **카테고리당 최대 1~2개 문장**: 같은 키워드에 대한 항목이 여러 개면 반드시 하나로 통합\n" +
             "2. 기술 용어(Repository, Service, Controller, Entity, 필드, 메서드 등)를 사용하지 마세요\n" +
             "3. 파일명, 클래스명, 패키지 경로를 언급하지 마세요\n" +
-            "4. '~하기 위한 ~기능 추가', '~할 수 있도록 ~기능 개선' 형태의 **목적 포함** 문장으로 작성\n" +
-            "5. 카테고리명은 비개발자가 이해할 수 있는 업무 관점의 한국어 이름으로 변환하세요\n" +
+            "4. 카테고리명은 비개발자가 이해할 수 있는 업무 관점의 한국어 이름으로 변환하세요\n" +
             "   예: 'scout' → '스카우트 관리', 'evaluation' → '선수 평가', 'weather' → '날씨 정보'\n" +
-            "6. 항목이 모두 다른 카테고리에 병합되어 비게 된 카테고리는 제외하세요\n" +
-            "7. 같은 문장 패턴에서 일부만 다른 항목은 쉼표로 병합하세요.\n" +
+            "5. 항목이 모두 다른 카테고리에 병합되어 비게 된 카테고리는 제외하세요\n" +
+            "6. 같은 문장 패턴에서 일부만 다른 항목은 쉼표로 병합하세요.\n" +
             "   예: '날씨 필드 추가' + '점수 필드 추가' → '날씨, 점수 필드 추가'\n" +
-            "8. 같은 대상에 대한 세부 변경(필드 추가, 옵션 변경, 데이터 분리 등)은 의도 단위로 통합하세요.\n" +
+            "7. 같은 대상에 대한 세부 변경(필드 추가, 옵션 변경, 데이터 분리 등)은 의도 단위로 통합하세요.\n" +
             "   예: '날씨 필드 추가' + '보조 포지션 선택 기능' + '소속 분리' → '영입후보 관리 항목 추가'\n" +
             "   개별 필드나 옵션을 나열하지 말고, 해당 변경의 상위 의도로 한 문장에 압축하세요.\n\n" +
             "## 응답 형식\n" +
             "반드시 아래 JSON 객체 형식으로만 응답하세요. 다른 텍스트를 포함하지 마세요.\n" +
             "{\n" +
-            "  \"카테고리명\": [\"변경 목적 + 요약 1\"],\n" +
-            "  \"카테고리명\": [\"변경 목적 + 요약 1\"]\n" +
+            "  \"카테고리명\": [\"구체적 변경 요약 1\"],\n" +
+            "  \"카테고리명\": [\"구체적 변경 요약 1\"]\n" +
             "}";
     /** 카테고리에서 괄호 안 키워드를 추출하는 패턴: "비즈니스 로직 (scout)" → "scout" */
     private static final Pattern KEYWORD_PATTERN = Pattern.compile("\\(([^)]+)\\)");
@@ -102,6 +101,38 @@ public class LlmDescriptionCompressorService {
             "image", "file", "attachment", "weather", "google",
             "project", "task", "issue", "customer", "client", "company"
     );
+    /**
+     * 키워드 → 한국어 메뉴/기능명 번역 맵
+     *
+     * <p>카테고리명과 항목 텍스트에서 영문 키워드 대신 한국어 메뉴명을 사용합니다.
+     * 이 맵에 없는 키워드는 원문 그대로 유지되며, KNOWN_DOMAIN_KEYWORDS에도 없으면
+     * "기타 기능"으로 통합됩니다.</p>
+     */
+    private static final Map<String, String> KEYWORD_TRANSLATIONS = Map.ofEntries(
+            Map.entry("scout", "스카우트"), Map.entry("player", "선수"),
+            Map.entry("team", "팀"), Map.entry("match", "경기"),
+            Map.entry("league", "리그"), Map.entry("season", "시즌"),
+            Map.entry("evaluation", "평가"), Map.entry("observation", "관찰"),
+            Map.entry("assessment", "평가"), Map.entry("candidate", "후보"),
+            Map.entry("position", "포지션"), Map.entry("transfer", "이적"),
+            Map.entry("contract", "계약"), Map.entry("salary", "급여"),
+            Map.entry("agent", "에이전트"), Map.entry("schedule", "일정"),
+            Map.entry("weather", "날씨"), Map.entry("event", "이벤트"),
+            Map.entry("note", "메모"), Map.entry("tag", "태그"),
+            Map.entry("category", "카테고리"), Map.entry("priority", "우선순위"),
+            Map.entry("report", "보고서"), Map.entry("document", "문서"),
+            Map.entry("template", "템플릿"), Map.entry("notification", "알림"),
+            Map.entry("message", "메시지"), Map.entry("comment", "댓글"),
+            Map.entry("user", "사용자"), Map.entry("member", "회원"),
+            Map.entry("admin", "관리자"), Map.entry("role", "역할"),
+            Map.entry("permission", "권한"), Map.entry("auth", "인증"),
+            Map.entry("profile", "프로필"), Map.entry("setting", "설정"),
+            Map.entry("config", "설정"), Map.entry("dashboard", "대시보드"),
+            Map.entry("statistics", "통계"), Map.entry("history", "이력"),
+            Map.entry("content", "콘텐츠"), Map.entry("google", "Google 연동"),
+            Map.entry("project", "프로젝트"), Map.entry("task", "작업"),
+            Map.entry("customer", "고객"), Map.entry("client", "클라이언트")
+    );
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
     @Value("${app.llm.prompt-output-dir:./llm-prompts}")
@@ -131,24 +162,28 @@ public class LlmDescriptionCompressorService {
         }
         // 1단계: 같은 키워드의 카테고리 병합 + 중복 제거
         Map<String, Set<String>> merged = mergeCategories(changesByFeature);
+        // 1.5단계: 계층 키워드에서 자식→부모 관계 맵 구축
+        Map<String, String> childToParent = buildChildToParentMap(merged.keySet());
         // 2단계: 키워드 기반 요약 압축 (LLM 없어도 동작)
         Map<String, List<String>> summarized = summarizeByKeyword(merged);
-        // 3단계: 메뉴 기준 그룹핑 (계층적 키워드를 상위 메뉴로 병합)
-        Map<String, List<String>> menuGrouped = groupByMenu(summarized);
+        // 3단계: 메뉴 기준 그룹핑 (계층적 키워드를 상위 메뉴로 병합, 자식→부모 맥락 활용)
+        Map<String, List<String>> menuGrouped = groupByMenu(summarized, childToParent);
         // 3.5단계: 의도 기반 압축 (같은 의도의 세부 항목을 하나의 의도 문장으로 통합)
         Map<String, List<String>> intentCompressed = compressToIntent(menuGrouped);
-        // 3.6단계: 미번역 카테고리 통합 (영문 키워드 그대로 남은 카테고리를 하나로 병합)
-        Map<String, List<String>> finalCompressed = mergeUntranslatedCategories(intentCompressed);
+        // 3.6단계: 미분류 카테고리 재분배 (항목 내용 기반으로 가장 가까운 메뉴에 흡수)
+        Map<String, List<String>> redistributed = redistributeOrphanCategories(intentCompressed);
+        // 3.7단계: 주체 없는 제네릭 항목 제거 (메뉴명이 이미 맥락을 제공하므로 불필요)
+        Map<String, List<String>> finalCompressed = removeGenericItems(redistributed);
         if (llmClient == null) {
             int totalBefore = merged.values().stream().mapToInt(Set::size).sum();
             int totalAfter = finalCompressed.values().stream().mapToInt(List::size).sum();
             log.debug("LLM 비활성화 - 의도 기반 압축 적용 ({}건 → {}건)", totalBefore, totalAfter);
-            return wrapWithPurpose(finalCompressed);
+            return finalCompressed;
         }
         // 4단계: LLM 추가 압축 (의도 기반으로 사전 압축된 데이터 전달)
-        Map<String, Set<String>> menuMerged = groupByMenuSet(merged);
+        Map<String, Set<String>> menuMerged = groupByMenuSet(merged, childToParent);
         Map<String, Set<String>> intentMergedForLlm = compressToIntentSet(menuMerged);
-        Map<String, Set<String>> finalMergedForLlm = mergeUntranslatedCategoriesSet(intentMergedForLlm);
+        Map<String, Set<String>> finalMergedForLlm = redistributeOrphanCategoriesSet(intentMergedForLlm);
         int totalItems = finalMergedForLlm.values().stream().mapToInt(Set::size).sum();
         try {
             String userPrompt = buildUserPrompt(finalMergedForLlm);
@@ -229,10 +264,16 @@ public class LlmDescriptionCompressorService {
         if (keywordItems.isEmpty()) {
             return new ArrayList<>(items);
         }
-        // 접두사 생성 (계층적 키워드는 상위 맥락 포함)
-        String prefix = parentKeyword != null
-                ? parentKeyword + " 기능에서 " + childKeyword
-                : childKeyword;
+        // 접두사 생성 (한국어 메뉴명 사용, 계층적 키워드는 하위 기능만 표시)
+        String translatedChild = translateKeyword(childKeyword);
+        String prefix;
+        if (parentKeyword != null) {
+            // 계층 키워드: 하위 기능명만 접두사로 사용 (상위는 메뉴 그룹명에 반영됨)
+            prefix = translatedChild;
+        } else {
+            // 단일 키워드: 메뉴명과 동일하므로 접두사 생략
+            prefix = "";
+        }
         // 액션 분류
         boolean hasNew = false, hasQuery = false, hasManage = false;
         boolean hasModify = false, hasDelete = false;
@@ -253,22 +294,22 @@ public class LlmDescriptionCompressorService {
         // 액션별 개별 항목 생성 (하위 압축에서 패턴 매칭이 가능하도록 일관된 형식)
         List<String> summary = new ArrayList<>();
         if (hasNew || hasManage) {
-            summary.add(prefix + " 관리 기능 신규 추가");
+            summary.add(withPrefix(prefix, "관리 기능 신규 추가"));
         } else if (hasQuery) {
-            summary.add(prefix + " 조회 기능 추가");
+            summary.add(withPrefix(prefix, "조회 기능 추가"));
         } else if (!specialActions.isEmpty()) {
             for (String action : specialActions) {
-                summary.add(prefix + " " + action + " 기능 추가");
+                summary.add(withPrefix(prefix, action + " 기능 추가"));
             }
             specialActions.clear();
         } else {
-            summary.add(prefix + " 관련 변경");
+            summary.add(withPrefix(prefix, "관련 변경"));
         }
         if (hasModify) {
-            summary.add(prefix + " 관리 기능 개선");
+            summary.add(withPrefix(prefix, "관리 기능 개선"));
         }
         if (hasDelete) {
-            summary.add(prefix + " 삭제 기능 추가");
+            summary.add(withPrefix(prefix, "삭제 기능 추가"));
         }
         // 키워드와 무관한 고유 항목은 그대로 추가
         summary.addAll(otherItems);
@@ -339,10 +380,11 @@ public class LlmDescriptionCompressorService {
      * @param summarized 키워드별 요약 결과
      * @return 메뉴 기준으로 그룹핑된 요약 결과
      */
-    private Map<String, List<String>> groupByMenu(Map<String, List<String>> summarized) {
+    private Map<String, List<String>> groupByMenu(Map<String, List<String>> summarized,
+                                                      Map<String, String> childToParent) {
         Map<String, List<String>> grouped = new LinkedHashMap<>();
         for (Map.Entry<String, List<String>> entry : summarized.entrySet()) {
-            String menuKey = extractMenuKey(entry.getKey());
+            String menuKey = extractMenuKey(entry.getKey(), childToParent);
             grouped.computeIfAbsent(menuKey, k -> new ArrayList<>()).addAll(entry.getValue());
         }
         // 각 메뉴 내에서 압축: 중복 제거 → 유사 패턴 병합 → 액션 접미사 병합
@@ -560,61 +602,71 @@ public class LlmDescriptionCompressorService {
         }
         return sb.toString();
     }
-    /** 행위 접미사 → 목적 중심 접미사 변환 패턴 (긴 패턴 우선) */
-    private static final String[][] PURPOSE_PATTERNS = {
-            {"관리 기능 신규 추가", "정보를 체계적으로 관리하기 위한 기능 신규 추가"},
-            {"관리 기능 개선", "관리 프로세스를 개선하기 위한 기능 수정"},
-            {"관리 기능 추가", "정보를 효율적으로 관리하기 위한 기능 추가"},
-            {"조회 기능 추가", "정보를 효율적으로 조회하기 위한 기능 추가"},
-            {"삭제 기능 추가", "불필요한 데이터를 정리하기 위한 삭제 기능 추가"},
-            {"초기화 기능 추가", "데이터 초기 설정을 위한 초기화 기능 추가"},
-            {"동기화 기능 추가", "데이터 일관성 유지를 위한 동기화 기능 추가"},
-            {"변환 기능 추가", "데이터 형식 변환을 위한 기능 추가"},
-            {"검증 기능 추가", "데이터 정합성 확보를 위한 검증 기능 추가"},
-            {"입력 기능 추가", "정보 입력을 지원하기 위한 기능 추가"},
-            {"기능 신규 추가", "업무 효율화를 위한 기능 신규 추가"},
-            {"기능 추가", "업무 지원을 위한 기능 추가"},
-            {"기능 개선", "사용성 향상을 위한 기능 개선"},
-            {"기능 연동", "외부 시스템 연동을 위한 기능 추가"},
-            {"정보 관리 추가", "정보를 관리하기 위한 기능 추가"},
-            {"처리 기능 연동", "처리 자동화를 위한 기능 연동"},
-            {"필드 추가", "관리 항목 확장을 위한 데이터 항목 추가"},
-            {"관련 변경", "안정성 향상을 위한 관련 기능 수정"},
-    };
     /**
-     * 압축 결과의 각 항목에 목적 프레이밍을 적용합니다.
+     * 주체 없는 제네릭 액션 패턴 목록
      *
-     * <p>행위 중심 서술("~기능 추가")을 목적 중심 서술("~하기 위한 기능 추가")로 변환합니다.
-     * 예: "scout 관리 기능 신규 추가" → "scout 정보를 체계적으로 관리하기 위한 기능 신규 추가"</p>
+     * <p>메뉴명이 이미 맥락을 제공하므로, 주체 없이 액션만 있는 항목은
+     * 정보를 추가하지 않습니다. 이런 항목은 제거 대상입니다.
+     * 예: "스카우트" 메뉴 아래 "관리 기능 신규 추가"는 의미 없음</p>
      */
-    private Map<String, List<String>> wrapWithPurpose(Map<String, List<String>> compressed) {
+    private static final Set<String> GENERIC_ACTION_PATTERNS = Set.of(
+            "관리 기능 신규 추가", "관리 기능 추가", "관리 기능 개선",
+            "조회 기능 추가", "삭제 기능 추가",
+            "기능 추가", "기능 개선", "기능 신규 추가",
+            "기능 연동", "필드 추가", "관련 변경",
+            "초기화 기능 추가", "동기화 기능 추가", "변환 기능 추가",
+            "검증 기능 추가", "입력 기능 추가", "정보 관리 추가",
+            "처리 기능 연동"
+    );
+    /**
+     * 메뉴별 항목에서 주체 없는 제네릭 항목을 제거합니다.
+     *
+     * <p>메뉴명이 맥락을 제공하므로 "관리 기능 신규 추가" 같은 주체 없는 액션만으로는
+     * 의미가 없습니다. 구체적 주체가 있는 항목(예: "날씨 조회 기능 추가")만 유지합니다.</p>
+     *
+     * <p>메뉴의 모든 항목이 제네릭이면, 해당 메뉴에서 가장 대표적인 항목 하나만
+     * "{메뉴명} 기능 추가 및 개선" 형태로 남깁니다.</p>
+     */
+    private Map<String, List<String>> removeGenericItems(Map<String, List<String>> compressed) {
         Map<String, List<String>> result = new LinkedHashMap<>();
+        int removedCount = 0;
         for (Map.Entry<String, List<String>> entry : compressed.entrySet()) {
-            List<String> purposeItems = new ArrayList<>();
-            for (String item : entry.getValue()) {
-                purposeItems.add(addPurposeContext(item));
+            String menu = entry.getKey();
+            List<String> items = entry.getValue();
+            List<String> specific = new ArrayList<>();
+            for (String item : items) {
+                if (!isGenericItem(item, menu)) {
+                    specific.add(item);
+                }
             }
-            result.put(entry.getKey(), purposeItems);
+            if (specific.isEmpty()) {
+                // 모든 항목이 제네릭 → 대표 항목 하나로 축약
+                specific.add(menu + " 기능 추가 및 개선");
+            }
+            removedCount += items.size() - specific.size();
+            result.put(menu, specific);
+        }
+        if (removedCount > 0) {
+            log.debug("제네릭 항목 제거: {}건", removedCount);
         }
         return result;
     }
     /**
-     * 단일 항목에 목적 접미사를 적용합니다.
+     * 항목이 주체 없는 제네릭 액션인지 판별합니다.
      *
-     * <p>항목이 알려진 행위 접미사로 끝나면, 해당 접미사를 목적 포함 접미사로 교체합니다.
-     * 매칭되지 않는 항목은 원본을 그대로 반환합니다.</p>
+     * <p>항목이 GENERIC_ACTION_PATTERNS에 정확히 일치하거나,
+     * "{메뉴명} {제네릭 패턴}" 형태(메뉴명 반복)인 경우 제네릭으로 판별합니다.</p>
      */
-    private String addPurposeContext(String item) {
-        for (String[] pattern : PURPOSE_PATTERNS) {
-            if (item.endsWith(pattern[0])) {
-                String subject = item.substring(0, item.length() - pattern[0].length()).trim();
-                if (!subject.isEmpty()) {
-                    return subject + " " + pattern[1];
-                }
-                return pattern[1];
-            }
+    private boolean isGenericItem(String item, String menuName) {
+        String trimmed = item.trim();
+        // 정확히 제네릭 패턴과 일치
+        if (GENERIC_ACTION_PATTERNS.contains(trimmed)) return true;
+        // "{메뉴명} {제네릭 패턴}" 형태 (메뉴명이 반복되므로 의미 없음)
+        if (trimmed.startsWith(menuName + " ")) {
+            String afterMenu = trimmed.substring(menuName.length() + 1).trim();
+            if (GENERIC_ACTION_PATTERNS.contains(afterMenu)) return true;
         }
-        return item;
+        return false;
     }
     /**
      * 의도 기반 압축을 위한 항목 분류 패턴 (긴 패턴 우선 매칭)
@@ -739,61 +791,133 @@ public class LlmDescriptionCompressorService {
     /**
      * 도메인 매핑이 없는 카테고리(영문 키워드 그대로 남은 것)를 하나의 카테고리로 통합합니다.
      *
-     * <p>비개발자에게 무의미한 영문 키워드(shape, afc 등)를 카테고리명과 항목 텍스트에서
-     * 모두 제거하고, 액션(관리 기능 추가 등)만 남겨 "기타 기능"으로 병합합니다.
-     * 키워드 자체가 아니라 '어디에 종속되는지'가 중요하므로, 맥락을 알 수 없는
-     * 키워드는 출력하지 않습니다.</p>
+     * <p>미분류 카테고리(한국어 번역이 안 된 영문 키워드)의 항목 내용을 분석하여
+     * 가장 관련 있는 기존 한국어 메뉴에 흡수합니다. 항목 텍스트에서 한국어 메뉴명이
+     * 발견되면 해당 메뉴로 이동하고, 매칭 안 되면 가장 항목이 많은 메뉴에 흡수합니다.
+     * 기존 한국어 메뉴가 하나도 없는 경우에만 "기타 기능"을 생성합니다.</p>
      *
-     * <p>예: shape → "shape 관리 기능 신규 추가", afc → "afc 관리 기능 신규 추가"
-     * → "기타 기능" → "관리 기능 신규 추가" (키워드 제거, 액션만 유지)</p>
+     * <p>예: shape → 항목에 "선수" 관련 내용 → "선수" 메뉴로 흡수
+     * afc → 매칭 없음, 가장 큰 메뉴 "스카우트"로 흡수</p>
      */
-    private Map<String, List<String>> mergeUntranslatedCategories(Map<String, List<String>> compressed) {
+    private Map<String, List<String>> redistributeOrphanCategories(Map<String, List<String>> compressed) {
         Map<String, List<String>> known = new LinkedHashMap<>();
-        List<String> unknownItems = new ArrayList<>();
+        Map<String, List<String>> orphans = new LinkedHashMap<>();
         for (Map.Entry<String, List<String>> entry : compressed.entrySet()) {
             if (isUnknownKeyword(entry.getKey())) {
-                String keyword = entry.getKey();
-                for (String item : entry.getValue()) {
-                    unknownItems.add(stripUnknownPrefix(item, keyword));
-                }
+                orphans.put(entry.getKey(), entry.getValue());
             } else {
                 known.put(entry.getKey(), entry.getValue());
             }
         }
-        if (unknownItems.isEmpty()) {
-            return compressed;
+        if (orphans.isEmpty()) return compressed;
+        if (known.isEmpty()) {
+            // 한국어 메뉴가 없으면 모두 기타로 통합
+            List<String> allItems = new ArrayList<>();
+            for (Map.Entry<String, List<String>> e : orphans.entrySet()) {
+                for (String item : e.getValue()) {
+                    allItems.add(stripUnknownPrefix(item, e.getKey()));
+                }
+            }
+            Map<String, List<String>> result = new LinkedHashMap<>();
+            result.put("기타 기능", mergeByActionSuffix(mergeSimilarItems(deduplicateItems(allItems))));
+            return result;
         }
-        List<String> merged = mergeByActionSuffix(mergeSimilarItems(deduplicateItems(unknownItems)));
         Map<String, List<String>> result = new LinkedHashMap<>(known);
-        result.put("기타 기능", merged);
-        log.debug("미지 카테고리 통합: {}개 → '기타 기능' ({}건)", compressed.size() - known.size(), merged.size());
+        int redistributed = 0;
+        for (Map.Entry<String, List<String>> orphan : orphans.entrySet()) {
+            String keyword = orphan.getKey();
+            List<String> items = orphan.getValue();
+            // 항목 내용에서 가장 관련 있는 메뉴 찾기
+            String bestMenu = findBestMenuForItems(items, known.keySet());
+            if (bestMenu == null) {
+                // 매칭 실패 → 가장 항목이 많은 메뉴에 흡수
+                bestMenu = findLargestMenu(result);
+            }
+            for (String item : items) {
+                result.computeIfAbsent(bestMenu, k -> new ArrayList<>())
+                        .add(stripUnknownPrefix(item, keyword));
+            }
+            redistributed += items.size();
+        }
+        log.debug("고아 카테고리 재분배: {}개 카테고리 {}건 → 기존 메뉴로 흡수",
+                orphans.size(), redistributed);
         return result;
     }
     /**
-     * 원본 항목(Set)에 미지 카테고리 통합을 적용합니다.
-     *
-     * <p>LLM에 전달할 데이터에서 미지 키워드 카테고리의 키워드 접두사를 제거하고
-     * "기타 기능"으로 병합합니다.</p>
+     * 원본 항목(Set)에 고아 카테고리 재분배를 적용합니다.
      */
-    private Map<String, Set<String>> mergeUntranslatedCategoriesSet(Map<String, Set<String>> compressed) {
+    private Map<String, Set<String>> redistributeOrphanCategoriesSet(Map<String, Set<String>> compressed) {
         Map<String, Set<String>> known = new LinkedHashMap<>();
-        Set<String> unknownItems = new LinkedHashSet<>();
+        Map<String, Set<String>> orphans = new LinkedHashMap<>();
         for (Map.Entry<String, Set<String>> entry : compressed.entrySet()) {
             if (isUnknownKeyword(entry.getKey())) {
-                String keyword = entry.getKey();
-                for (String item : entry.getValue()) {
-                    unknownItems.add(stripUnknownPrefix(item, keyword));
-                }
+                orphans.put(entry.getKey(), entry.getValue());
             } else {
                 known.put(entry.getKey(), entry.getValue());
             }
         }
-        if (unknownItems.isEmpty()) {
-            return compressed;
+        if (orphans.isEmpty()) return compressed;
+        if (known.isEmpty()) {
+            Set<String> allItems = new LinkedHashSet<>();
+            for (Map.Entry<String, Set<String>> e : orphans.entrySet()) {
+                for (String item : e.getValue()) {
+                    allItems.add(stripUnknownPrefix(item, e.getKey()));
+                }
+            }
+            Map<String, Set<String>> result = new LinkedHashMap<>();
+            result.put("기타 기능", allItems);
+            return result;
         }
         Map<String, Set<String>> result = new LinkedHashMap<>(known);
-        result.put("기타 기능", unknownItems);
+        for (Map.Entry<String, Set<String>> orphan : orphans.entrySet()) {
+            String keyword = orphan.getKey();
+            Set<String> items = orphan.getValue();
+            String bestMenu = findBestMenuForItems(new ArrayList<>(items), known.keySet());
+            if (bestMenu == null) {
+                bestMenu = findLargestMenuSet(result);
+            }
+            for (String item : items) {
+                result.computeIfAbsent(bestMenu, k -> new LinkedHashSet<>())
+                        .add(stripUnknownPrefix(item, keyword));
+            }
+        }
         return result;
+    }
+    /**
+     * 항목 내용에서 가장 관련 있는 메뉴를 찾습니다.
+     *
+     * <p>항목 텍스트에 기존 메뉴명(한국어)이 포함되어 있으면 해당 메뉴를 반환합니다.
+     * 여러 메뉴에 매칭되면 가장 많이 매칭된 메뉴를 반환합니다.</p>
+     */
+    private String findBestMenuForItems(List<String> items, Set<String> knownMenus) {
+        Map<String, Integer> menuScores = new LinkedHashMap<>();
+        for (String item : items) {
+            for (String menu : knownMenus) {
+                if (item.contains(menu)) {
+                    menuScores.merge(menu, 1, Integer::sum);
+                }
+            }
+        }
+        if (menuScores.isEmpty()) return null;
+        return menuScores.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse(null);
+    }
+    /**
+     * 가장 항목이 많은 메뉴를 반환합니다.
+     */
+    private String findLargestMenu(Map<String, List<String>> menus) {
+        return menus.entrySet().stream()
+                .max(Comparator.comparingInt(e -> e.getValue().size()))
+                .map(Map.Entry::getKey)
+                .orElse("기타 기능");
+    }
+    private String findLargestMenuSet(Map<String, Set<String>> menus) {
+        return menus.entrySet().stream()
+                .max(Comparator.comparingInt(e -> e.getValue().size()))
+                .map(Map.Entry::getKey)
+                .orElse("기타 기능");
     }
     /**
      * 키워드가 도메인에서 의미를 파악할 수 없는 미지 키워드인지 확인합니다.
@@ -829,10 +953,11 @@ public class LlmDescriptionCompressorService {
      * @param merged 키워드별 원본 항목
      * @return 메뉴 기준으로 그룹핑된 원본 항목
      */
-    private Map<String, Set<String>> groupByMenuSet(Map<String, Set<String>> merged) {
+    private Map<String, Set<String>> groupByMenuSet(Map<String, Set<String>> merged,
+                                                        Map<String, String> childToParent) {
         Map<String, Set<String>> grouped = new LinkedHashMap<>();
         for (Map.Entry<String, Set<String>> entry : merged.entrySet()) {
-            String menuKey = extractMenuKey(entry.getKey());
+            String menuKey = extractMenuKey(entry.getKey(), childToParent);
             grouped.computeIfAbsent(menuKey, k -> new LinkedHashSet<>()).addAll(entry.getValue());
         }
         return grouped;
@@ -846,12 +971,59 @@ public class LlmDescriptionCompressorService {
      * @param keyword 원본 키워드 (예: "scout/weather", "player")
      * @return 메뉴 키 (예: "scout", "player")
      */
-    private String extractMenuKey(String keyword) {
+    private String extractMenuKey(String keyword, Map<String, String> childToParent) {
         String normalized = normalizeKeyword(keyword);
         if (normalized.contains("/")) {
-            return normalized.split("/")[0];
+            return translateKeyword(normalized.split("/")[0]);
         }
+        // 직접 번역 가능하면 사용
+        String translated = KEYWORD_TRANSLATIONS.get(normalized.toLowerCase());
+        if (translated != null) return translated;
+        // 다른 곳에서 부모가 있는 자식 키워드면 부모 메뉴로 흡수
+        String parent = childToParent.get(normalized.toLowerCase());
+        if (parent != null) return translateKeyword(parent);
+        // 번역 불가, 부모도 없음 - 원본 유지 (나중에 재분배 대상)
         return normalized;
+    }
+    /**
+     * 키워드를 한국어 메뉴명으로 번역합니다.
+     *
+     * <p>KEYWORD_TRANSLATIONS에 등록된 키워드는 한국어 메뉴명으로 변환됩니다.
+     * 등록되지 않은 키워드는 원본을 그대로 반환합니다.</p>
+     */
+    private String translateKeyword(String keyword) {
+        String translated = KEYWORD_TRANSLATIONS.get(keyword.toLowerCase());
+        return translated != null ? translated : keyword;
+    }
+    /**
+     * 접두사와 액션을 결합합니다. 접두사가 비어있으면 액션만 반환합니다.
+     */
+    private String withPrefix(String prefix, String action) {
+        return prefix.isEmpty() ? action : prefix + " " + action;
+    }
+    /**
+     * 계층 키워드에서 자식→부모 관계 맵을 구축합니다.
+     *
+     * <p>입력 키워드 셋에서 "parent/child" 형태의 계층 키워드를 찾아
+     * child → parent 매핑을 생성합니다. 이를 통해 단독으로 등장하는 키워드도
+     * 다른 곳에서 부모가 확인되면 해당 부모 메뉴로 흡수할 수 있습니다.</p>
+     *
+     * <p>예: keywords에 "scout/shape", "scout/weather" 존재
+     * → {"shape" → "scout", "weather" → "scout"}</p>
+     */
+    private Map<String, String> buildChildToParentMap(Set<String> keywords) {
+        Map<String, String> childToParent = new LinkedHashMap<>();
+        for (String keyword : keywords) {
+            String normalized = normalizeKeyword(keyword);
+            if (normalized.contains("/")) {
+                String[] parts = normalized.split("/", 2);
+                childToParent.putIfAbsent(parts[1].toLowerCase(), parts[0]);
+            }
+        }
+        if (!childToParent.isEmpty()) {
+            log.debug("자식→부모 맵 구축: {}", childToParent);
+        }
+        return childToParent;
     }
     private Map<String, List<String>> toListMap(Map<String, Set<String>> setMap) {
         Map<String, List<String>> result = new LinkedHashMap<>();
