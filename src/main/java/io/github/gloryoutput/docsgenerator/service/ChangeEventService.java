@@ -602,20 +602,10 @@ public class ChangeEventService {
         }
         // LLM으로 카테고리별 변경 내용 압축 (LLM 없으면 원본 카테고리 구조 유지)
         Map<String, List<String>> compressedByCategory = llmDescriptionCompressorService.compress(changesByFeature);
-        // description 조립 (기능 변경 중심)
+        // description 조립 (기능 변경 중심, 간결하게)
         StringBuilder sb = new StringBuilder();
         sb.append("[").append(repoName).append("] ");
-        sb.append("커밋 ").append(commits.size()).append("건, 변경 파일 ").append(allFilePaths.size()).append("개");
-        sb.append("\n작성자: ").append(String.join(", ", authors));
-        if (earliestDate != null && latestDate != null) {
-            sb.append(" | 기간: ").append(earliestDate).append(" ~ ").append(latestDate);
-        }
-        if (!layers.isEmpty()) {
-            sb.append("\n영향 레이어: ").append(String.join(", ", layers));
-        }
-        if (!topKeywords.isEmpty()) {
-            sb.append("\n관련 기능: ").append(String.join(", ", topKeywords));
-        }
+        sb.append("커밋 ").append(commits.size()).append("건");
         if (!compressedByCategory.isEmpty()) {
             sb.append("\n\n기능별 변경 내용:");
             for (Map.Entry<String, List<String>> entry : compressedByCategory.entrySet()) {

@@ -47,6 +47,7 @@ public class DocxConverterService {
     private static final int PARA_SPACING_BEFORE = 40;
     private static final int PARA_SPACING_AFTER = 40;
     private static final Pattern BOLD_PATTERN = Pattern.compile("\\*\\*(.+?)\\*\\*");
+    private static final Pattern DETAILS_SUMMARY_PATTERN = Pattern.compile("^<summary>(.+?)</summary>$");
     /** 보고서 6개 섹션 헤더 (순서 보장) */
     private static final List<String> SECTION_HEADERS = List.of(
             "목적", "발생한 문제", "문제 원인", "문제 해결 과정", "결과", "개선 및 예방 방안");
@@ -111,9 +112,10 @@ public class DocxConverterService {
                 parsed.metaItems.put(cells[0].trim(), cells[1].trim());
             }
         }
-        // 섹션 파싱 (### 제목 → 내용)
+        // 섹션 파싱 (### 제목 또는 <details><summary>제목</summary> → 내용)
         String currentSection = null;
         StringBuilder currentContent = new StringBuilder();
+        boolean inDetails = false;
         for (String line : lines) {
             String trimmed = line.trim();
             if (trimmed.startsWith("### ")) {
@@ -123,6 +125,29 @@ public class DocxConverterService {
                 }
                 currentSection = trimmed.substring(4).trim();
                 currentContent = new StringBuilder();
+                inDetails = false;
+            } else if (trimmed.equals("<details>")) {
+                // <details> 블록 시작 - 이전 섹션 저장
+                if (currentSection != null) {
+                    parsed.sections.put(currentSection, currentContent.toString().trim());
+                    currentSection = null;
+                    currentContent = new StringBuilder();
+                }
+                inDetails = true;
+            } else if (inDetails && currentSection == null) {
+                Matcher summaryMatcher = DETAILS_SUMMARY_PATTERN.matcher(trimmed);
+                if (summaryMatcher.matches()) {
+                    currentSection = summaryMatcher.group(1).trim();
+                    currentContent = new StringBuilder();
+                }
+            } else if (trimmed.equals("</details>")) {
+                // <details> 블록 종료 - 섹션 저장
+                if (currentSection != null) {
+                    parsed.sections.put(currentSection, currentContent.toString().trim());
+                    currentSection = null;
+                    currentContent = new StringBuilder();
+                }
+                inDetails = false;
             } else if (currentSection != null) {
                 currentContent.append(line).append("\n");
             }

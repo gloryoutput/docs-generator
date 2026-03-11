@@ -35,19 +35,22 @@ public class LlmDescriptionCompressorService {
     private static final String SYSTEM_PROMPT =
             "당신은 IT 변경 보고서 작성 전문가입니다.\n" +
             "아래 '기능별 변경 내용'은 여러 파일을 수정하여 발생한 변경 사항을 기능별로 정리한 것입니다.\n" +
-            "이것을 비개발자(경영진, 고객사)가 읽을 보고서에 들어갈 **핵심 변경 요약**으로 압축해 주세요.\n\n" +
+            "이것을 비개발자(경영진, 고객사)가 읽을 보고서에 들어갈 **핵심 변경 요약**으로 대폭 압축해 주세요.\n\n" +
             "## 압축 규칙\n" +
-            "1. 각 카테고리 내에서 중복·유사 항목을 병합하여 1~3개 핵심 문장으로 압축하세요\n" +
-            "2. 기술 용어(Repository, Service, Controller, Entity, 필드, 메서드 등)를 사용하지 마세요\n" +
-            "3. 파일명, 클래스명, 패키지 경로를 언급하지 마세요\n" +
-            "4. '~기능 추가', '~처리 방식 개선', '~관리 기능 확장' 형태의 간결한 문장으로 작성\n" +
-            "5. 카테고리명은 비개발자가 이해할 수 있는 업무 관점의 한국어 이름으로 변환하세요\n" +
-            "   예: 'scout' → '스카우트 관리', 'evaluation' → '선수 평가'\n" +
-            "6. 항목이 모두 다른 카테고리에 병합되어 비게 된 카테고리는 제외하세요\n\n" +
+            "1. **반드시 원본 항목 수의 1/5 이하로 압축하세요** (예: 항목 20개 → 최대 4개)\n" +
+            "2. 연관된 여러 카테고리를 하나의 상위 카테고리로 통합하세요\n" +
+            "   예: 'scout', 'evaluation', 'observation' → '스카우트 평가 관리'\n" +
+            "3. 각 카테고리 내에서 모든 유사 항목을 **1개의 핵심 문장**으로 병합하세요\n" +
+            "4. 기술 용어(Repository, Service, Controller, Entity, 필드, 메서드 등)를 사용하지 마세요\n" +
+            "5. 파일명, 클래스명, 패키지 경로를 언급하지 마세요\n" +
+            "6. '~기능 추가', '~처리 방식 개선', '~관리 기능 확장' 형태의 간결한 문장으로 작성\n" +
+            "7. 카테고리명은 비개발자가 이해할 수 있는 업무 관점의 한국어 이름으로 변환하세요\n" +
+            "8. 최종 카테고리 수는 **최대 5개**를 넘지 마세요\n" +
+            "9. 항목이 1~2개뿐인 소규모 카테고리는 다른 카테고리에 병합하거나 '기타 개선'에 통합하세요\n\n" +
             "## 응답 형식\n" +
             "반드시 아래 JSON 객체 형식으로만 응답하세요. 다른 텍스트를 포함하지 마세요.\n" +
             "{\n" +
-            "  \"카테고리명\": [\"변경 요약 1\", \"변경 요약 2\"],\n" +
+            "  \"카테고리명\": [\"변경 요약 1\"],\n" +
             "  \"카테고리명\": [\"변경 요약 1\"]\n" +
             "}";
     /** 카테고리에서 괄호 안 키워드를 추출하는 패턴: "비즈니스 로직 (scout)" → "scout" */
@@ -74,13 +77,18 @@ public class LlmDescriptionCompressorService {
      * @param changesByFeature 기능 영역 → 변경 설명 목록
      * @return 카테고리 → 압축된 변경 요약 목록
      */
+    /** fallback 시 최대 카테고리 수 */
+    private static final int MAX_FALLBACK_CATEGORIES = 5;
+    /** fallback 시 카테고리당 최대 항목 수 */
+    private static final int MAX_FALLBACK_ITEMS_PER_CATEGORY = 2;
+
     public Map<String, List<String>> compress(Map<String, Set<String>> changesByFeature) {
         if (changesByFeature == null || changesByFeature.isEmpty()) {
             return Map.of();
         }
         // 1단계: 같은 키워드의 카테고리 병합 + 중복 제거
         Map<String, Set<String>> merged = mergeCategories(changesByFeature);
-        Map<String, List<String>> fallback = toListMap(merged);
+        Map<String, List<String>> fallback = truncateFallback(toListMap(merged));
         if (llmClient == null) {
             log.debug("LLM 비활성화 - 카테고리 병합 결과 반환 ({}개 → {}개 카테고리)",
                     changesByFeature.size(), fallback.size());
@@ -139,6 +147,51 @@ public class LlmDescriptionCompressorService {
             return matcher.group(1);
         }
         return categoryName;
+    }
+
+    /**
+     * fallback 결과를 최대 카테고리 수와 카테고리당 항목 수로 제한합니다.
+     *
+     * <p>항목이 많은 카테고리를 우선 유지하고, 초과 카테고리의 항목은
+     * "기타 개선" 카테고리로 통합합니다.</p>
+     */
+    private Map<String, List<String>> truncateFallback(Map<String, List<String>> original) {
+        if (original.size() <= MAX_FALLBACK_CATEGORIES) {
+            // 카테고리 수 제한 내: 항목 수만 제한
+            Map<String, List<String>> result = new LinkedHashMap<>();
+            for (Map.Entry<String, List<String>> entry : original.entrySet()) {
+                List<String> items = entry.getValue();
+                result.put(entry.getKey(), items.size() > MAX_FALLBACK_ITEMS_PER_CATEGORY
+                        ? items.subList(0, MAX_FALLBACK_ITEMS_PER_CATEGORY)
+                        : items);
+            }
+            return result;
+        }
+        // 카테고리를 항목 수 기준 내림차순 정렬하여 상위 카테고리 유지
+        List<Map.Entry<String, List<String>>> sorted = new ArrayList<>(original.entrySet());
+        sorted.sort((a, b) -> Integer.compare(b.getValue().size(), a.getValue().size()));
+        Map<String, List<String>> result = new LinkedHashMap<>();
+        List<String> etcItems = new ArrayList<>();
+        for (int i = 0; i < sorted.size(); i++) {
+            Map.Entry<String, List<String>> entry = sorted.get(i);
+            if (i < MAX_FALLBACK_CATEGORIES - 1) {
+                List<String> items = entry.getValue();
+                result.put(entry.getKey(), items.size() > MAX_FALLBACK_ITEMS_PER_CATEGORY
+                        ? items.subList(0, MAX_FALLBACK_ITEMS_PER_CATEGORY)
+                        : items);
+            } else {
+                // 초과 카테고리의 첫 번째 항목만 수집
+                if (!entry.getValue().isEmpty()) {
+                    etcItems.add(entry.getValue().get(0));
+                }
+            }
+        }
+        if (!etcItems.isEmpty()) {
+            result.put("기타 개선", etcItems.size() > MAX_FALLBACK_ITEMS_PER_CATEGORY
+                    ? etcItems.subList(0, MAX_FALLBACK_ITEMS_PER_CATEGORY)
+                    : etcItems);
+        }
+        return result;
     }
 
     private Map<String, List<String>> toListMap(Map<String, Set<String>> setMap) {
