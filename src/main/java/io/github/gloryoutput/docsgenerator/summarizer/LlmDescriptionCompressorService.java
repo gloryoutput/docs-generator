@@ -50,6 +50,9 @@ public class LlmDescriptionCompressorService {
             "   예: 'scout' → '스카우트 관리', 'evaluation' → '선수 평가', 'weather' → '날씨 정보'\n" +
             "6. 항목이 모두 다른 카테고리에 병합되어 비게 된 카테고리는 제외하세요\n" +
             "7. '조회 기능 추가', '관리 기능 추가', '데이터 관리 추가'가 모두 있으면 → '관리 기능 신규 추가'로 통합\n" +
+            "   같은 문장 패턴에서 일부만 다른 항목은 쉼표로 병합하세요.\n" +
+            "   예: '날씨 필드 추가' + '점수 필드 추가' → '날씨, 점수 필드 추가'\n" +
+            "   예: '선수 조회 기능 추가' + '팀 조회 기능 추가' → '선수, 팀 조회 기능 추가'\n" +
             "8. 하나의 카테고리 안에 여러 하위 기능(예: scout 관련 항목 + weather 관련 항목)이 섞여 있으면,\n" +
             "   하위 기능은 상위 기능의 맥락에서 서술하세요. 하위 기능을 독립 카테고리로 분리하지 마세요.\n" +
             "   나쁜 예: '날씨 관리 기능 신규 추가' (하위 기능을 독립적으로 서술)\n" +
@@ -139,8 +142,8 @@ public class LlmDescriptionCompressorService {
             String keyword = entry.getKey();
             Set<String> items = entry.getValue();
             if (items.isEmpty()) continue;
-            // 항목이 3개 이하면 그대로 유지
-            if (items.size() <= 3) {
+            // 항목이 2개 이하면 그대로 유지
+            if (items.size() <= 2) {
                 result.put(keyword, new ArrayList<>(items));
                 continue;
             }
@@ -229,14 +232,8 @@ public class LlmDescriptionCompressorService {
             }
             summary.add(sb.toString());
         }
-        // 키워드와 무관한 고유 항목은 별도 추가 (최대 2개)
-        int otherLimit = Math.min(otherItems.size(), 2);
-        for (int i = 0; i < otherLimit; i++) {
-            summary.add(otherItems.get(i));
-        }
-        if (otherItems.size() > 2) {
-            summary.add("외 " + (otherItems.size() - 2) + "건의 관련 변경");
-        }
+        // 키워드와 무관한 고유 항목은 그대로 추가 (groupByMenu에서 유사 패턴 병합 처리)
+        summary.addAll(otherItems);
         return summary;
     }
 
@@ -290,10 +287,206 @@ public class LlmDescriptionCompressorService {
             String menuKey = extractMenuKey(entry.getKey());
             grouped.computeIfAbsent(menuKey, k -> new ArrayList<>()).addAll(entry.getValue());
         }
-        if (grouped.size() < summarized.size()) {
-            log.debug("메뉴 기준 그룹핑: {}개 카테고리 → {}개 메뉴", summarized.size(), grouped.size());
+        // 각 메뉴 내에서 압축: 중복 제거 → 유사 패턴 병합 → 액션 접미사 병합
+        int totalBefore = grouped.values().stream().mapToInt(List::size).sum();
+        for (Map.Entry<String, List<String>> entry : grouped.entrySet()) {
+            List<String> items = deduplicateItems(entry.getValue());
+            items = mergeSimilarItems(items);
+            items = mergeByActionSuffix(items);
+            entry.setValue(items);
+        }
+        int totalAfter = grouped.values().stream().mapToInt(List::size).sum();
+        if (totalBefore != totalAfter) {
+            log.debug("메뉴 내 압축: {}건 → {}건", totalBefore, totalAfter);
         }
         return grouped;
+    }
+    /**
+     * 의미적으로 중복되거나 다른 항목에 포함되는 항목을 제거합니다.
+     *
+     * <p>한 항목의 핵심 단어가 다른 항목에 모두 포함되어 있으면 중복으로 판단합니다.
+     * 예: "scout 조회 기능 추가"는 "scout 관리 기능 신규 추가 (조회, 데이터 관리 포함)"에 포함</p>
+     */
+    private List<String> deduplicateItems(List<String> items) {
+        if (items.size() <= 1) return new ArrayList<>(items);
+        // 긴 항목 우선 (더 상세한 항목이 남도록)
+        List<String> sorted = new ArrayList<>(items);
+        sorted.sort(Comparator.comparingInt(String::length).reversed());
+        List<String> result = new ArrayList<>();
+        for (String item : sorted) {
+            Set<String> itemKeywords = extractContentKeywords(item);
+            boolean isDuplicate = false;
+            for (String existing : result) {
+                Set<String> existingKeywords = extractContentKeywords(existing);
+                // item의 핵심 단어가 existing에 모두 포함되면 중복
+                if (existingKeywords.containsAll(itemKeywords)) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            if (!isDuplicate) {
+                result.add(item);
+            }
+        }
+        return result;
+    }
+    /** 항목에서 비교용 핵심 단어를 추출합니다 (조사/접미사 등 제거). */
+    private Set<String> extractContentKeywords(String item) {
+        Set<String> keywords = new LinkedHashSet<>();
+        // 괄호 내용 분리하여 포함
+        String withoutParens = item.replaceAll("\\([^)]*\\)", "");
+        String parenContent = "";
+        int parenStart = item.indexOf('(');
+        int parenEnd = item.indexOf(')');
+        if (parenStart >= 0 && parenEnd > parenStart) {
+            parenContent = item.substring(parenStart + 1, parenEnd);
+        }
+        for (String word : (withoutParens + " " + parenContent).split("[\\s,]+")) {
+            String cleaned = word.trim().toLowerCase();
+            // 의미 없는 단어 제외
+            if (cleaned.length() >= 2
+                    && !cleaned.equals("기능") && !cleaned.equals("추가") && !cleaned.equals("신규")
+                    && !cleaned.equals("관리") && !cleaned.equals("포함") && !cleaned.equals("관련")
+                    && !cleaned.equals("변경") && !cleaned.equals("개선") && !cleaned.equals("기능에서")) {
+                keywords.add(cleaned);
+            }
+        }
+        return keywords;
+    }
+    /**
+     * 같은 패턴의 항목들을 병합합니다.
+     *
+     * <p>공통 접두사/접미사를 공유하고 중간 부분만 다른 항목들을
+     * 쉼표로 연결하여 하나의 문장으로 합칩니다.</p>
+     *
+     * <p>예: "스카우팅 스케줄 날씨 필드 추가" + "스카우팅 스케줄 점수 필드 추가"
+     * → "스카우팅 스케줄 날씨, 점수 필드 추가"</p>
+     *
+     * <p>접두사가 없고 접미사만 공유하는 경우도 병합합니다(접미사 2단어 이상).
+     * 예: "날씨 정보 관리 추가" + "점수 정보 관리 추가"
+     * → "날씨, 점수 정보 관리 추가"</p>
+     */
+    private List<String> mergeSimilarItems(List<String> items) {
+        if (items.size() <= 1) return new ArrayList<>(items);
+        List<String> result = new ArrayList<>();
+        boolean[] used = new boolean[items.size()];
+        for (int i = 0; i < items.size(); i++) {
+            if (used[i]) continue;
+            String[] baseWords = items.get(i).split("\\s+");
+            if (baseWords.length < 2) {
+                result.add(items.get(i));
+                continue;
+            }
+            List<String> diffParts = new ArrayList<>();
+            int bestPrefixLen = -1;
+            int bestSuffixLen = -1;
+            for (int j = i + 1; j < items.size(); j++) {
+                if (used[j]) continue;
+                String[] otherWords = items.get(j).split("\\s+");
+                int prefixLen = commonPrefixLen(baseWords, otherWords);
+                int suffixLen = commonSuffixLen(baseWords, otherWords, prefixLen);
+                int baseMidLen = baseWords.length - prefixLen - suffixLen;
+                int otherMidLen = otherWords.length - prefixLen - suffixLen;
+                // 병합 조건: 차이 부분이 1~3단어이고
+                // (접두사 ≥ 1 AND 접미사 ≥ 1) 또는 (접미사 ≥ 2)
+                boolean canMerge = baseMidLen >= 1 && baseMidLen <= 3
+                        && otherMidLen >= 1 && otherMidLen <= 3
+                        && ((prefixLen >= 1 && suffixLen >= 1) || suffixLen >= 2);
+                if (canMerge) {
+                    if (bestPrefixLen == -1) {
+                        bestPrefixLen = prefixLen;
+                        bestSuffixLen = suffixLen;
+                        diffParts.add(joinWords(baseWords, prefixLen, baseWords.length - suffixLen));
+                    }
+                    if (prefixLen == bestPrefixLen && suffixLen == bestSuffixLen) {
+                        diffParts.add(joinWords(otherWords, prefixLen, otherWords.length - suffixLen));
+                        used[j] = true;
+                    }
+                }
+            }
+            if (diffParts.isEmpty()) {
+                result.add(items.get(i));
+            } else {
+                used[i] = true;
+                StringBuilder sb = new StringBuilder();
+                if (bestPrefixLen > 0) {
+                    sb.append(joinWords(baseWords, 0, bestPrefixLen)).append(" ");
+                }
+                sb.append(String.join(", ", diffParts));
+                sb.append(" ").append(joinWords(baseWords, baseWords.length - bestSuffixLen, baseWords.length));
+                result.add(sb.toString());
+            }
+        }
+        return result;
+    }
+    /** 같은 액션 접미사를 공유하는 항목들의 주어부를 쉼표로 병합합니다. */
+    private static final String[] ACTION_SUFFIXES = {
+            "관리 기능 신규 추가", "관리 기능 개선", "관리 기능 추가",
+            "조회/생성 기능 추가", "조회 기능 추가", "기능 신규 추가",
+            "기능 추가", "기능 개선", "기능 연동",
+            "정보 관리 추가", "처리 기능 연동", "필드 추가",
+    };
+    /**
+     * 같은 액션 접미사를 공유하는 항목들을 병합합니다.
+     *
+     * <p>{@code mergeSimilarItems}에서 처리하지 못한 나머지 항목 중,
+     * 같은 액션 접미사(예: "기능 추가", "정보 관리 추가")를 공유하는 항목의
+     * 주어부를 쉼표로 연결합니다.</p>
+     *
+     * <p>예: "평가 기능 추가" + "관찰 기능 추가" → "평가, 관찰 기능 추가"</p>
+     */
+    private List<String> mergeByActionSuffix(List<String> items) {
+        if (items.size() <= 1) return new ArrayList<>(items);
+        // 액션 접미사별로 그룹핑 (긴 접미사 우선 매칭)
+        Map<String, List<String>> bySuffix = new LinkedHashMap<>();
+        List<String> unmatched = new ArrayList<>();
+        for (String item : items) {
+            String matchedSuffix = null;
+            for (String suffix : ACTION_SUFFIXES) {
+                if (item.endsWith(suffix) && item.length() > suffix.length() + 1) {
+                    matchedSuffix = suffix;
+                    break;
+                }
+            }
+            if (matchedSuffix != null) {
+                String subject = item.substring(0, item.length() - matchedSuffix.length()).trim();
+                bySuffix.computeIfAbsent(matchedSuffix, k -> new ArrayList<>()).add(subject);
+            } else {
+                unmatched.add(item);
+            }
+        }
+        List<String> result = new ArrayList<>();
+        for (Map.Entry<String, List<String>> entry : bySuffix.entrySet()) {
+            List<String> subjects = entry.getValue();
+            // 단일 항목이면 그대로, 2개 이상이면 쉼표 병합
+            if (subjects.size() == 1) {
+                result.add(subjects.get(0) + " " + entry.getKey());
+            } else {
+                result.add(String.join(", ", subjects) + " " + entry.getKey());
+            }
+        }
+        result.addAll(unmatched);
+        return result;
+    }
+    private int commonPrefixLen(String[] a, String[] b) {
+        int len = 0;
+        int min = Math.min(a.length, b.length);
+        while (len < min && a[len].equals(b[len])) len++;
+        return len;
+    }
+    private int commonSuffixLen(String[] a, String[] b, int prefixLen) {
+        int len = 0;
+        int maxSuffix = Math.min(a.length, b.length) - prefixLen;
+        while (len < maxSuffix && a[a.length - 1 - len].equals(b[b.length - 1 - len])) len++;
+        return len;
+    }
+    private String joinWords(String[] words, int from, int to) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = from; i < to; i++) {
+            if (i > from) sb.append(" ");
+            sb.append(words[i]);
+        }
+        return sb.toString();
     }
     /**
      * 원본 항목(Set)을 메뉴(상위 기능) 기준으로 그룹핑합니다.
