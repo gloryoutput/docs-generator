@@ -707,11 +707,15 @@ public class ChangeEventService {
      *
      * <p>파일명에서 클래스 접미사(Service, Controller 등)를 제거하고
      * 도메인 용어로 변환하여 비개발자가 이해할 수 있는 엔티티명을 반환합니다.
-     * 예: "PlayerDetailService.java" → "선수 상세",
-     * "ScoutCandidateEntity.java" → "스카우트 후보"</p>
+     * 한국어로 번역되지 않는 엔티티(shape, afc 등)는 비개발자에게 무의미하므로
+     * null을 반환하여 출력에서 제외합니다.</p>
+     *
+     * <p>예: "PlayerDetailService.java" → "선수 상세",
+     * "ScoutCandidateEntity.java" → "스카우트 후보",
+     * "ShapeService.java" → null (번역 불가)</p>
      *
      * @param filePath 파일 경로
-     * @return 한국어 엔티티명 또는 null (추출 불가 시)
+     * @return 한국어 엔티티명 또는 null (번역 불가 시)
      */
     private String extractEntityFromPath(String filePath) {
         if (filePath == null) return null;
@@ -724,6 +728,8 @@ public class ChangeEventService {
         if (entityBase.isEmpty()) return null;
         String readable = toReadableName(entityBase);
         if (readable.isBlank() || readable.length() < 2) return null;
+        // 한국어로 번역되지 않은 엔티티명은 비개발자에게 무의미하므로 null 반환
+        if (!readable.matches(".*[가-힣].*")) return null;
         return readable;
     }
     /** CamelCase 이름에서 도메인 의미를 추출하여 읽기 쉬운 한국어로 변환합니다. */

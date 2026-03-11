@@ -83,6 +83,25 @@ public class LlmDescriptionCompressorService {
             Map.entry("spreadsheet", "google"),
             Map.entry("spreadsheets", "google")
     );
+    /**
+     * 도메인에서 의미를 파악할 수 있는 알려진 키워드 목록
+     *
+     * <p>이 목록에 없는 영문 키워드(shape, afc 등)는 비개발자에게 무의미하므로
+     * "기타 기능"으로 통합 시 키워드 접두사를 제거합니다.</p>
+     */
+    private static final Set<String> KNOWN_DOMAIN_KEYWORDS = Set.of(
+            "scout", "player", "team", "match", "league", "season",
+            "evaluation", "observation", "assessment", "candidate",
+            "position", "transfer", "contract", "salary", "agent",
+            "schedule", "event", "note", "tag", "category", "priority",
+            "report", "document", "template", "notification", "message",
+            "comment", "user", "member", "admin", "role", "permission",
+            "auth", "profile", "setting", "config", "dashboard",
+            "statistics", "summary", "history", "log", "record",
+            "status", "type", "level", "content", "block", "page",
+            "image", "file", "attachment", "weather", "google",
+            "project", "task", "issue", "customer", "client", "company"
+    );
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
     @Value("${app.llm.prompt-output-dir:./llm-prompts}")
@@ -100,7 +119,8 @@ public class LlmDescriptionCompressorService {
      * 2) 키워드 기반 요약 압축 (같은 키워드의 유사 항목을 1~2문장으로 통합)
      * 3) 메뉴 기준 그룹핑 (계층적 키워드를 상위 메뉴로 병합, 예: "scout/weather" → "scout")
      * 3.5) 의도 기반 압축 (같은 의도의 세부 항목을 통합, 예: 날씨/포지션/소속 필드 추가 → "영입후보 필드 추가")
-     * 4) LLM이 있으면 의도 기반으로 사전 압축된 데이터로 추가 압축, 없으면 3.5단계 결과 반환</p>
+     * 3.6) 미번역 카테고리 통합 (영문 키워드 그대로 남은 카테고리를 "기타 기능"으로 병합, 예: shape+afc → "기타 기능")
+     * 4) LLM이 있으면 의도 기반으로 사전 압축된 데이터로 추가 압축, 없으면 3.6단계 결과 반환</p>
      *
      * @param changesByFeature 기능 영역 → 변경 설명 목록
      * @return 카테고리 → 압축된 변경 요약 목록
@@ -117,35 +137,38 @@ public class LlmDescriptionCompressorService {
         Map<String, List<String>> menuGrouped = groupByMenu(summarized);
         // 3.5단계: 의도 기반 압축 (같은 의도의 세부 항목을 하나의 의도 문장으로 통합)
         Map<String, List<String>> intentCompressed = compressToIntent(menuGrouped);
+        // 3.6단계: 미번역 카테고리 통합 (영문 키워드 그대로 남은 카테고리를 하나로 병합)
+        Map<String, List<String>> finalCompressed = mergeUntranslatedCategories(intentCompressed);
         if (llmClient == null) {
             int totalBefore = merged.values().stream().mapToInt(Set::size).sum();
-            int totalAfter = intentCompressed.values().stream().mapToInt(List::size).sum();
+            int totalAfter = finalCompressed.values().stream().mapToInt(List::size).sum();
             log.debug("LLM 비활성화 - 의도 기반 압축 적용 ({}건 → {}건)", totalBefore, totalAfter);
-            return wrapWithPurpose(intentCompressed);
+            return wrapWithPurpose(finalCompressed);
         }
         // 4단계: LLM 추가 압축 (의도 기반으로 사전 압축된 데이터 전달)
         Map<String, Set<String>> menuMerged = groupByMenuSet(merged);
         Map<String, Set<String>> intentMergedForLlm = compressToIntentSet(menuMerged);
-        int totalItems = intentMergedForLlm.values().stream().mapToInt(Set::size).sum();
+        Map<String, Set<String>> finalMergedForLlm = mergeUntranslatedCategoriesSet(intentMergedForLlm);
+        int totalItems = finalMergedForLlm.values().stream().mapToInt(Set::size).sum();
         try {
-            String userPrompt = buildUserPrompt(intentMergedForLlm);
+            String userPrompt = buildUserPrompt(finalMergedForLlm);
             String timestamp = LocalDateTime.now().format(FILE_FORMATTER);
             savePromptFile(timestamp, "compress_input", SYSTEM_PROMPT + "\n\n---\n\n" + userPrompt);
-            log.info("LLM 변경 설명 압축 시작 - {}개 메뉴, {}건 항목 (의도 기반 사전 압축 적용)", intentMergedForLlm.size(), totalItems);
+            log.info("LLM 변경 설명 압축 시작 - {}개 메뉴, {}건 항목 (의도 기반 사전 압축 적용)", finalMergedForLlm.size(), totalItems);
             String result = llmClient.chat(SYSTEM_PROMPT, userPrompt);
             savePromptFile(timestamp, "compress_output", result);
             Map<String, List<String>> compressed = parseResponse(result);
             if (compressed == null || compressed.isEmpty()) {
                 log.warn("LLM 압축 결과가 비어있음 - 의도 기반 압축 반환");
-                return intentCompressed;
+                return finalCompressed;
             }
             int compressedItems = compressed.values().stream().mapToInt(List::size).sum();
             log.info("LLM 변경 설명 압축 완료 - {}개 메뉴 {}건 → {}개 카테고리 {}건",
-                    intentMergedForLlm.size(), totalItems, compressed.size(), compressedItems);
+                    finalMergedForLlm.size(), totalItems, compressed.size(), compressedItems);
             return compressed;
         } catch (Exception e) {
             log.warn("LLM 변경 설명 압축 실패 - 의도 기반 압축 반환. 원인: {}", e.getMessage());
-            return intentCompressed;
+            return finalCompressed;
         }
     }
     /**
@@ -712,6 +735,90 @@ public class LlmDescriptionCompressorService {
             }
         }
         return null;
+    }
+    /**
+     * 도메인 매핑이 없는 카테고리(영문 키워드 그대로 남은 것)를 하나의 카테고리로 통합합니다.
+     *
+     * <p>비개발자에게 무의미한 영문 키워드(shape, afc 등)를 카테고리명과 항목 텍스트에서
+     * 모두 제거하고, 액션(관리 기능 추가 등)만 남겨 "기타 기능"으로 병합합니다.
+     * 키워드 자체가 아니라 '어디에 종속되는지'가 중요하므로, 맥락을 알 수 없는
+     * 키워드는 출력하지 않습니다.</p>
+     *
+     * <p>예: shape → "shape 관리 기능 신규 추가", afc → "afc 관리 기능 신규 추가"
+     * → "기타 기능" → "관리 기능 신규 추가" (키워드 제거, 액션만 유지)</p>
+     */
+    private Map<String, List<String>> mergeUntranslatedCategories(Map<String, List<String>> compressed) {
+        Map<String, List<String>> known = new LinkedHashMap<>();
+        List<String> unknownItems = new ArrayList<>();
+        for (Map.Entry<String, List<String>> entry : compressed.entrySet()) {
+            if (isUnknownKeyword(entry.getKey())) {
+                String keyword = entry.getKey();
+                for (String item : entry.getValue()) {
+                    unknownItems.add(stripUnknownPrefix(item, keyword));
+                }
+            } else {
+                known.put(entry.getKey(), entry.getValue());
+            }
+        }
+        if (unknownItems.isEmpty()) {
+            return compressed;
+        }
+        List<String> merged = mergeByActionSuffix(mergeSimilarItems(deduplicateItems(unknownItems)));
+        Map<String, List<String>> result = new LinkedHashMap<>(known);
+        result.put("기타 기능", merged);
+        log.debug("미지 카테고리 통합: {}개 → '기타 기능' ({}건)", compressed.size() - known.size(), merged.size());
+        return result;
+    }
+    /**
+     * 원본 항목(Set)에 미지 카테고리 통합을 적용합니다.
+     *
+     * <p>LLM에 전달할 데이터에서 미지 키워드 카테고리의 키워드 접두사를 제거하고
+     * "기타 기능"으로 병합합니다.</p>
+     */
+    private Map<String, Set<String>> mergeUntranslatedCategoriesSet(Map<String, Set<String>> compressed) {
+        Map<String, Set<String>> known = new LinkedHashMap<>();
+        Set<String> unknownItems = new LinkedHashSet<>();
+        for (Map.Entry<String, Set<String>> entry : compressed.entrySet()) {
+            if (isUnknownKeyword(entry.getKey())) {
+                String keyword = entry.getKey();
+                for (String item : entry.getValue()) {
+                    unknownItems.add(stripUnknownPrefix(item, keyword));
+                }
+            } else {
+                known.put(entry.getKey(), entry.getValue());
+            }
+        }
+        if (unknownItems.isEmpty()) {
+            return compressed;
+        }
+        Map<String, Set<String>> result = new LinkedHashMap<>(known);
+        result.put("기타 기능", unknownItems);
+        return result;
+    }
+    /**
+     * 키워드가 도메인에서 의미를 파악할 수 없는 미지 키워드인지 확인합니다.
+     *
+     * <p>한국어가 포함되어 있거나, KNOWN_DOMAIN_KEYWORDS에 등록된 키워드는
+     * 의미가 파악 가능하므로 false를 반환합니다.
+     * "shape", "afc" 등 도메인 매핑이 없는 영문 키워드만 true입니다.</p>
+     */
+    private boolean isUnknownKeyword(String keyword) {
+        if (keyword.matches(".*[가-힣].*")) return false;
+        return !KNOWN_DOMAIN_KEYWORDS.contains(keyword.toLowerCase());
+    }
+    /**
+     * 항목 텍스트에서 미지 키워드 접두사를 제거합니다.
+     *
+     * <p>비개발자에게 무의미한 키워드(shape, afc 등)를 항목에서 제거하고
+     * 액션 부분만 유지합니다.
+     * 예: "shape 관리 기능 신규 추가" → "관리 기능 신규 추가"</p>
+     */
+    private String stripUnknownPrefix(String item, String keyword) {
+        if (item.toLowerCase().startsWith(keyword.toLowerCase() + " ")) {
+            String stripped = item.substring(keyword.length() + 1).trim();
+            if (!stripped.isEmpty()) return stripped;
+        }
+        return item;
     }
     /**
      * 원본 항목(Set)을 메뉴(상위 기능) 기준으로 그룹핑합니다.
