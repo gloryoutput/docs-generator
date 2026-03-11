@@ -54,7 +54,10 @@ public class LlmDescriptionCompressorService {
             "   예: 'scout' → '스카우트 관리', 'evaluation' → '선수 평가', 'weather' → '날씨 정보'\n" +
             "6. 항목이 모두 다른 카테고리에 병합되어 비게 된 카테고리는 제외하세요\n" +
             "7. 같은 문장 패턴에서 일부만 다른 항목은 쉼표로 병합하세요.\n" +
-            "   예: '날씨 필드 추가' + '점수 필드 추가' → '날씨, 점수 필드 추가'\n\n" +
+            "   예: '날씨 필드 추가' + '점수 필드 추가' → '날씨, 점수 필드 추가'\n" +
+            "8. 같은 대상에 대한 세부 변경(필드 추가, 옵션 변경, 데이터 분리 등)은 의도 단위로 통합하세요.\n" +
+            "   예: '날씨 필드 추가' + '보조 포지션 선택 기능' + '소속 분리' → '영입후보 관리 항목 추가'\n" +
+            "   개별 필드나 옵션을 나열하지 말고, 해당 변경의 상위 의도로 한 문장에 압축하세요.\n\n" +
             "## 응답 형식\n" +
             "반드시 아래 JSON 객체 형식으로만 응답하세요. 다른 텍스트를 포함하지 마세요.\n" +
             "{\n" +
@@ -96,7 +99,8 @@ public class LlmDescriptionCompressorService {
      * 1) 같은 키워드를 공유하는 카테고리 병합 (예: "API (scout)" + "비즈니스 로직 (scout)" → "scout")
      * 2) 키워드 기반 요약 압축 (같은 키워드의 유사 항목을 1~2문장으로 통합)
      * 3) 메뉴 기준 그룹핑 (계층적 키워드를 상위 메뉴로 병합, 예: "scout/weather" → "scout")
-     * 4) LLM이 있으면 메뉴 기준 그룹핑된 데이터로 추가 압축, 없으면 3단계 결과 반환</p>
+     * 3.5) 의도 기반 압축 (같은 의도의 세부 항목을 통합, 예: 날씨/포지션/소속 필드 추가 → "영입후보 필드 추가")
+     * 4) LLM이 있으면 의도 기반으로 사전 압축된 데이터로 추가 압축, 없으면 3.5단계 결과 반환</p>
      *
      * @param changesByFeature 기능 영역 → 변경 설명 목록
      * @return 카테고리 → 압축된 변경 요약 목록
@@ -111,34 +115,37 @@ public class LlmDescriptionCompressorService {
         Map<String, List<String>> summarized = summarizeByKeyword(merged);
         // 3단계: 메뉴 기준 그룹핑 (계층적 키워드를 상위 메뉴로 병합)
         Map<String, List<String>> menuGrouped = groupByMenu(summarized);
+        // 3.5단계: 의도 기반 압축 (같은 의도의 세부 항목을 하나의 의도 문장으로 통합)
+        Map<String, List<String>> intentCompressed = compressToIntent(menuGrouped);
         if (llmClient == null) {
             int totalBefore = merged.values().stream().mapToInt(Set::size).sum();
-            int totalAfter = menuGrouped.values().stream().mapToInt(List::size).sum();
-            log.debug("LLM 비활성화 - 키워드 기반 요약 적용 ({}건 → {}건)", totalBefore, totalAfter);
-            return wrapWithPurpose(menuGrouped);
+            int totalAfter = intentCompressed.values().stream().mapToInt(List::size).sum();
+            log.debug("LLM 비활성화 - 의도 기반 압축 적용 ({}건 → {}건)", totalBefore, totalAfter);
+            return wrapWithPurpose(intentCompressed);
         }
-        // 4단계: LLM 추가 압축 (메뉴 기준으로 그룹핑된 원본 데이터 전달)
+        // 4단계: LLM 추가 압축 (의도 기반으로 사전 압축된 데이터 전달)
         Map<String, Set<String>> menuMerged = groupByMenuSet(merged);
-        int totalItems = menuMerged.values().stream().mapToInt(Set::size).sum();
+        Map<String, Set<String>> intentMergedForLlm = compressToIntentSet(menuMerged);
+        int totalItems = intentMergedForLlm.values().stream().mapToInt(Set::size).sum();
         try {
-            String userPrompt = buildUserPrompt(menuMerged);
+            String userPrompt = buildUserPrompt(intentMergedForLlm);
             String timestamp = LocalDateTime.now().format(FILE_FORMATTER);
             savePromptFile(timestamp, "compress_input", SYSTEM_PROMPT + "\n\n---\n\n" + userPrompt);
-            log.info("LLM 변경 설명 압축 시작 - {}개 메뉴, {}건 항목", menuMerged.size(), totalItems);
+            log.info("LLM 변경 설명 압축 시작 - {}개 메뉴, {}건 항목 (의도 기반 사전 압축 적용)", intentMergedForLlm.size(), totalItems);
             String result = llmClient.chat(SYSTEM_PROMPT, userPrompt);
             savePromptFile(timestamp, "compress_output", result);
             Map<String, List<String>> compressed = parseResponse(result);
             if (compressed == null || compressed.isEmpty()) {
-                log.warn("LLM 압축 결과가 비어있음 - 메뉴 기준 요약 반환");
-                return menuGrouped;
+                log.warn("LLM 압축 결과가 비어있음 - 의도 기반 압축 반환");
+                return intentCompressed;
             }
             int compressedItems = compressed.values().stream().mapToInt(List::size).sum();
             log.info("LLM 변경 설명 압축 완료 - {}개 메뉴 {}건 → {}개 카테고리 {}건",
-                    menuMerged.size(), totalItems, compressed.size(), compressedItems);
+                    intentMergedForLlm.size(), totalItems, compressed.size(), compressedItems);
             return compressed;
         } catch (Exception e) {
-            log.warn("LLM 변경 설명 압축 실패 - 메뉴 기준 요약 반환. 원인: {}", e.getMessage());
-            return menuGrouped;
+            log.warn("LLM 변경 설명 압축 실패 - 의도 기반 압축 반환. 원인: {}", e.getMessage());
+            return intentCompressed;
         }
     }
     /**
@@ -585,6 +592,126 @@ public class LlmDescriptionCompressorService {
             }
         }
         return item;
+    }
+    /**
+     * 의도 기반 압축을 위한 항목 분류 패턴 (긴 패턴 우선 매칭)
+     *
+     * <p>항목에 포함된 키워드를 기반으로 의도 유형을 분류합니다.
+     * 같은 의도로 분류된 2개 이상의 항목은 하나의 의도 문장으로 통합됩니다.</p>
+     */
+    private static final String[][] INTENT_CLASSIFIERS = {
+            // {매칭 키워드, 의도 라벨}
+            {"필드 추가", "필드 추가"},
+            {"정보 관리 추가", "필드 추가"},
+            {"관리 기능 신규 추가", "관리 기능 신규 추가"},
+            {"관리 기능 개선", "관리 기능 개선"},
+            {"관리 기능 추가", "관리 기능 추가"},
+            {"조회 기능 추가", "조회 기능 추가"},
+            {"삭제 기능 추가", "기능 추가"},
+            {"초기화 기능 추가", "기능 추가"},
+            {"동기화 기능 추가", "기능 추가"},
+            {"변환 기능 추가", "기능 추가"},
+            {"검증 기능 추가", "기능 추가"},
+            {"입력 기능 추가", "기능 추가"},
+            {"기능 신규 추가", "기능 추가"},
+            {"기능 추가", "기능 추가"},
+            {"기능 개선", "기능 개선"},
+            {"기능 연동", "기능 연동"},
+            {"처리 기능 연동", "기능 연동"},
+            {"관련 변경", "관련 변경"},
+    };
+    /**
+     * 메뉴 그룹 내 항목들을 의도 기반으로 압축합니다.
+     *
+     * <p>같은 메뉴 그룹 내에서 동일한 의도(필드 추가, 기능 추가 등)로 분류되는
+     * 여러 항목을 하나의 의도 문장으로 통합합니다.
+     * 예: "날씨 필드 추가", "보조 포지션 필드 추가", "소속 필드 추가"
+     * → "scout 필드 추가"</p>
+     */
+    private Map<String, List<String>> compressToIntent(Map<String, List<String>> menuGrouped) {
+        Map<String, List<String>> result = new LinkedHashMap<>();
+        int totalBefore = menuGrouped.values().stream().mapToInt(List::size).sum();
+        for (Map.Entry<String, List<String>> entry : menuGrouped.entrySet()) {
+            String menu = entry.getKey();
+            List<String> items = entry.getValue();
+            if (items.size() <= 2) {
+                result.put(menu, items);
+                continue;
+            }
+            result.put(menu, buildIntentSummary(menu, items));
+        }
+        int totalAfter = result.values().stream().mapToInt(List::size).sum();
+        if (totalBefore != totalAfter) {
+            log.debug("의도 기반 압축: {}건 → {}건", totalBefore, totalAfter);
+        }
+        return result;
+    }
+    /**
+     * 원본 항목(Set)에 의도 기반 압축을 적용합니다.
+     *
+     * <p>LLM에 전달할 데이터를 의도 기반으로 사전 압축하여
+     * 토큰 사용량을 최소화합니다.</p>
+     */
+    private Map<String, Set<String>> compressToIntentSet(Map<String, Set<String>> menuMerged) {
+        Map<String, Set<String>> result = new LinkedHashMap<>();
+        for (Map.Entry<String, Set<String>> entry : menuMerged.entrySet()) {
+            String menu = entry.getKey();
+            Set<String> items = entry.getValue();
+            if (items.size() <= 2) {
+                result.put(menu, items);
+                continue;
+            }
+            List<String> compressed = buildIntentSummary(menu, new ArrayList<>(items));
+            result.put(menu, new LinkedHashSet<>(compressed));
+        }
+        return result;
+    }
+    /**
+     * 단일 메뉴 그룹의 항목들을 의도별로 분류하여 압축합니다.
+     *
+     * <p>각 항목을 의도 유형(필드 추가, 기능 추가, 기능 개선 등)으로 분류합니다.
+     * 같은 의도로 분류된 2개 이상의 항목은 "{menu} {의도}" 형태의
+     * 단일 문장으로 통합됩니다. 단일 항목은 원본을 유지합니다.</p>
+     *
+     * <p>예: "날씨 정보 관리 추가", "보조 포지션 정보 관리 추가", "소속 필드 추가"
+     * → "scout 필드 추가" (3개 모두 "필드 추가" 의도로 분류)</p>
+     */
+    private List<String> buildIntentSummary(String menu, List<String> items) {
+        Map<String, List<String>> intentGroups = new LinkedHashMap<>();
+        List<String> unclassified = new ArrayList<>();
+        for (String item : items) {
+            String intent = classifyIntent(item);
+            if (intent != null) {
+                intentGroups.computeIfAbsent(intent, k -> new ArrayList<>()).add(item);
+            } else {
+                unclassified.add(item);
+            }
+        }
+        List<String> result = new ArrayList<>();
+        for (Map.Entry<String, List<String>> group : intentGroups.entrySet()) {
+            if (group.getValue().size() >= 2) {
+                // 2개 이상이면 의도 문장으로 통합
+                result.add(menu + " " + group.getKey());
+            } else {
+                result.addAll(group.getValue());
+            }
+        }
+        result.addAll(unclassified);
+        return result;
+    }
+    /**
+     * 항목을 의도 유형으로 분류합니다.
+     *
+     * @param item 분류 대상 항목
+     * @return 의도 라벨 (매칭되지 않으면 null)
+     */
+    private String classifyIntent(String item) {
+        for (String[] classifier : INTENT_CLASSIFIERS) {
+            if (item.contains(classifier[0])) {
+                return classifier[1];
+            }
+        }
+        return null;
     }
     /**
      * 원본 항목(Set)을 메뉴(상위 기능) 기준으로 그룹핑합니다.

@@ -595,7 +595,7 @@ public class ChangeEventService {
                 String featureArea = detectFeatureArea(fc.getFilePath());
                 String changeSummary = fc.getChangeSummary();
                 if (changeSummary != null && !changeSummary.isEmpty()) {
-                    List<String> converted = convertToBusinessDescription(changeSummary);
+                    List<String> converted = convertToBusinessDescription(changeSummary, fc.getFilePath());
                     changesByFeature.computeIfAbsent(featureArea, k -> new LinkedHashSet<>()).addAll(converted);
                 }
             }
@@ -622,61 +622,72 @@ public class ChangeEventService {
         return sb.toString();
     }
     /**
-     * 개발자용 changeSummary를 비개발자가 이해할 수 있는 기능 설명으로 변환합니다.
+     * 개발자용 changeSummary를 의도 기반 비즈니스 설명으로 변환합니다.
      *
-     * <p>기술 용어(필드명, 어노테이션, 줄 수 변경 등)를 제거하고,
-     * 도메인 엔티티명을 추출하여 업무 관점의 설명으로 변환합니다.</p>
+     * <p>개별 필드명/메서드명을 나열하지 않고, 파일 경로에서 추출한 소속 엔티티 단위로
+     * 의도를 압축합니다. 이를 통해 LLM에 전달되는 데이터가 의도 기반으로 사전 압축됩니다.</p>
      *
      * <p>변환 예시:
-     * - "추가 필드: evaluationRepository, observationNoteRepository" → "평가, 관찰 메모 정보 관리 추가"
-     * - "추가 메서드: findOrCreateTeamExternal" → "팀 외부 정보 조회/생성 기능 추가"
+     * - PlayerDetailEntity.java + "추가 필드: socialSecurityNumber, passportNumber" → "선수 상세 필드 추가"
+     * - ScoutCandidateService.java + "추가 필드: weatherRepository" → "날씨 정보 관리 추가"
+     * - ScoutCandidateService.java + "추가 메서드: findByWeather" → "스카우트 후보 기능 추가"
      * - "새 클래스: ScoutObservationTagLookupService" → "스카우트 관찰 태그 조회 기능 신규 추가"</p>
+     *
+     * @param changeSummary Git diff에서 추출된 변경 요약
+     * @param filePath 변경된 파일 경로 (엔티티명 추출에 사용)
      */
-    private List<String> convertToBusinessDescription(String changeSummary) {
+    private List<String> convertToBusinessDescription(String changeSummary, String filePath) {
+        String entityName = extractEntityFromPath(filePath);
         List<String> results = new ArrayList<>();
-        // 세미콜론으로 분리된 여러 변경사항 처리
         String[] parts = changeSummary.split(";");
         for (String part : parts) {
             String trimmed = part.trim();
             if (trimmed.isEmpty()) continue;
-            // 보고서 노출 불필요 항목 필터링 (ReportNoiseFilter에서 통합 관리)
             if (ReportNoiseFilter.shouldFilterSummary(trimmed)) continue;
-            // 필드 추가 → 도메인 엔티티 추출
+            // 필드 추가 → 의도 기반 압축: 개별 필드명 대신 소속 엔티티 단위로 표현
             if (trimmed.startsWith("추가 필드:")) {
                 String fieldsPart = trimmed.substring("추가 필드:".length()).trim();
                 String[] fieldNames = fieldsPart.split(",");
-                List<String> entityNames = new ArrayList<>();
-                boolean hasServiceField = false;
+                List<String> repoEntityNames = new ArrayList<>();
+                boolean hasRegularField = false;
                 for (String fieldName : fieldNames) {
                     String fn = fieldName.trim();
                     if (fn.endsWith("Repository")) {
-                        entityNames.add(toReadableName(fn.replace("Repository", "")));
+                        repoEntityNames.add(toReadableName(fn.replace("Repository", "")));
                     } else if (fn.endsWith("Service")) {
                         String name = toReadableName(fn.replace("Service", ""));
                         results.add(name + " 처리 기능 연동");
-                        hasServiceField = true;
                     } else {
-                        entityNames.add(toReadableName(fn));
+                        hasRegularField = true;
                     }
                 }
-                if (!entityNames.isEmpty()) {
-                    results.add(String.join(", ", entityNames) + " 정보 관리 추가");
+                // Repository 필드: 참조 엔티티 데이터 연동
+                if (!repoEntityNames.isEmpty()) {
+                    results.add(String.join(", ", repoEntityNames) + " 정보 관리 추가");
+                }
+                // 일반 필드: 소속 엔티티 단위로 의도 압축 (주민번호, 여권번호 → 선수상세 필드 추가)
+                if (hasRegularField) {
+                    results.add(entityName != null ? entityName + " 필드 추가" : "필드 추가");
                 }
                 continue;
             }
-            // 새 클래스 → 기능명 추출
+            // 새 클래스 → 기능명 추출 (이미 엔티티 단위이므로 그대로 유지)
             if (trimmed.startsWith("새 클래스:")) {
                 String className = trimmed.substring("새 클래스:".length()).trim();
                 String featureName = extractFeatureName(className);
                 results.add(featureName + " 기능 신규 추가");
                 continue;
             }
-            // 메서드 추가 → 동작 + 대상 추출
+            // 메서드 추가 → 의도 기반 압축: 개별 메서드 동작 대신 소속 엔티티 단위로 표현
             if (trimmed.startsWith("추가 메서드:")) {
-                String methodsPart = trimmed.substring("추가 메서드:".length()).trim();
-                for (String methodName : methodsPart.split(",")) {
-                    String desc = convertMethodToAction(methodName.trim());
-                    if (desc != null) results.add(desc);
+                if (entityName != null) {
+                    results.add(entityName + " 기능 추가");
+                } else {
+                    String methodsPart = trimmed.substring("추가 메서드:".length()).trim();
+                    for (String methodName : methodsPart.split(",")) {
+                        String desc = convertMethodToAction(methodName.trim());
+                        if (desc != null) results.add(desc);
+                    }
                 }
                 continue;
             }
@@ -690,6 +701,30 @@ public class ChangeEventService {
             }
         }
         return results.stream().distinct().toList();
+    }
+    /**
+     * 파일 경로에서 소속 엔티티명을 추출합니다.
+     *
+     * <p>파일명에서 클래스 접미사(Service, Controller 등)를 제거하고
+     * 도메인 용어로 변환하여 비개발자가 이해할 수 있는 엔티티명을 반환합니다.
+     * 예: "PlayerDetailService.java" → "선수 상세",
+     * "ScoutCandidateEntity.java" → "스카우트 후보"</p>
+     *
+     * @param filePath 파일 경로
+     * @return 한국어 엔티티명 또는 null (추출 불가 시)
+     */
+    private String extractEntityFromPath(String filePath) {
+        if (filePath == null) return null;
+        String fileName = extractFileName(filePath);
+        if (!fileName.endsWith(".java")) return null;
+        String className = fileName.replace(".java", "");
+        String entityBase = className
+                .replaceAll("(Service|Controller|Repository|Impl|Handler|Listener|Mapper|Converter|Dto|Entity|Request|Response|Spec|Specification)$", "")
+                .trim();
+        if (entityBase.isEmpty()) return null;
+        String readable = toReadableName(entityBase);
+        if (readable.isBlank() || readable.length() < 2) return null;
+        return readable;
     }
     /** CamelCase 이름에서 도메인 의미를 추출하여 읽기 쉬운 한국어로 변환합니다. */
     private String toReadableName(String camelCase) {
@@ -803,6 +838,7 @@ public class ChangeEventService {
                 {"lookup", "조회"}, {"search", "검색"}, {"filter", "필터"},
                 {"preference", "환경설정"}, {"preferred", "선호"},
                 {"reference", "참조 정보"},
+                {"detail", "상세"}, {"info", "정보"}, {"management", "관리"},
         };
         String result = text;
         for (String[] mapping : domainMap) {
