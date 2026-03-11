@@ -1,5 +1,9 @@
 package io.github.gloryoutput.docsgenerator.controller;
 
+import io.github.gloryoutput.docsgenerator.domain.analysis.AnalysisRequest;
+import io.github.gloryoutput.docsgenerator.domain.analysis.AnalysisRequestRepository;
+import io.github.gloryoutput.docsgenerator.domain.project.Project;
+import io.github.gloryoutput.docsgenerator.domain.project.ProjectRepository;
 import io.github.gloryoutput.docsgenerator.domain.report.Report;
 import io.github.gloryoutput.docsgenerator.domain.report.ReportRepository;
 import io.github.gloryoutput.docsgenerator.dto.request.AnalysisCreateRequest;
@@ -20,6 +24,8 @@ import org.springframework.web.bind.annotation.*;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.UUID;
 
@@ -39,7 +45,11 @@ public class AnalysisController {
     private final AnalysisService analysisService;
     private final EvidenceService evidenceService;
     private final ReportRepository reportRepository;
+    private final AnalysisRequestRepository analysisRequestRepository;
+    private final ProjectRepository projectRepository;
     private final DocxConverterService docxConverterService;
+    private static final DateTimeFormatter PERIOD_FORMATTER = DateTimeFormatter.ofPattern("yyMMdd");
+    private static final DateTimeFormatter TIMESTAMP_FORMATTER = DateTimeFormatter.ofPattern("yyMMdd_HHmmss");
 
     /**
      * 분석을 요청합니다.
@@ -112,7 +122,18 @@ public class AnalysisController {
             extension = ".docx";
             contentType = MediaType.valueOf("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
         }
-        String fileName = URLEncoder.encode("보고서_" + idAnalysisRequest + extension, StandardCharsets.UTF_8)
+        // 파일명: {{프로젝트명}} 보고서_{{기간}}_yymmdd_hhmmss
+        AnalysisRequest analysisRequest = analysisRequestRepository.findById(analysisId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "분석 요청을 찾을 수 없습니다: " + idAnalysisRequest));
+        Project project = projectRepository.findById(analysisRequest.getIdProject())
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "프로젝트를 찾을 수 없습니다: " + analysisRequest.getIdProject()));
+        String period = analysisRequest.getStartDate().format(PERIOD_FORMATTER)
+                + "~" + analysisRequest.getEndDate().format(PERIOD_FORMATTER);
+        String timestamp = LocalDateTime.now().format(TIMESTAMP_FORMATTER);
+        String rawFileName = project.getProjectName() + " 보고서_" + period + "_" + timestamp + extension;
+        String fileName = URLEncoder.encode(rawFileName, StandardCharsets.UTF_8)
                 .replace("+", "%20");
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + fileName)

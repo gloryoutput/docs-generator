@@ -10,6 +10,7 @@ import io.github.gloryoutput.docsgenerator.service.RuleEngineService.ChangeEvent
 import io.github.gloryoutput.docsgenerator.service.RuleEngineService.MatchedRule;
 import io.github.gloryoutput.docsgenerator.summarizer.LlmChangeEventEnhancerService;
 import io.github.gloryoutput.docsgenerator.util.LayerDetector;
+import io.github.gloryoutput.docsgenerator.util.ReportNoiseFilter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -581,11 +582,13 @@ public class ChangeEventService {
                 .map(Map.Entry::getKey)
                 .toList();
         // 기능별 변경 상세 수집 (changeSummary → 비개발자용 변환)
+        // 설정/SQL/빌드 등 클라이언트가 몰라도 되는 파일은 기능별 변경에서 제외
         Map<String, Set<String>> changesByFeature = new LinkedHashMap<>();
         Set<String> processedFiles = new HashSet<>();
         for (GitDiffResult.CommitInfo commit : commits) {
             for (GitDiffResult.FileChange fc : commit.getFileChanges()) {
                 if (fc.getFilePath() == null || isGeneratedFile(fc.getFilePath())
+                        || ReportNoiseFilter.isInfraFile(fc.getFilePath())
                         || !processedFiles.add(fc.getFilePath())) continue;
                 String featureArea = detectFeatureArea(fc.getFilePath());
                 String changeSummary = fc.getChangeSummary();
@@ -640,11 +643,8 @@ public class ChangeEventService {
         for (String part : parts) {
             String trimmed = part.trim();
             if (trimmed.isEmpty()) continue;
-            // 노이즈 필터링
-            if (trimmed.matches("^MODIFY\\s*\\([+\\-\\d/\\s]+lines?\\)$")) continue;
-            if (trimmed.matches("^[+\\-\\d/\\s]+lines?$")) continue;
-            if (trimmed.matches("^추가 어노테이션:.*")) continue;
-            if (trimmed.startsWith("MODIFY")) continue;
+            // 보고서 노출 불필요 항목 필터링 (ReportNoiseFilter에서 통합 관리)
+            if (ReportNoiseFilter.shouldFilterSummary(trimmed)) continue;
             // 필드 추가 → 도메인 엔티티 추출
             if (trimmed.startsWith("추가 필드:")) {
                 String fieldsPart = trimmed.substring("추가 필드:".length()).trim();
@@ -762,7 +762,10 @@ public class ChangeEventService {
     }
     /**
      * 영문 도메인 용어를 한국어로 변환합니다.
-     * 매핑되지 않는 단어는 원문 그대로 유지합니다.
+     *
+     * <p>단어 경계(\b) 기반 정규식으로 매칭하여 부분 문자열 오치환을 방지합니다.
+     * 영어 복수형 접미사(s, es, ies)도 함께 처리합니다.
+     * 매핑되지 않는 단어는 원문 그대로 유지합니다.</p>
      */
     private String applyDomainTerms(String text) {
         // 순서 중요: 긴 복합어부터 매핑
@@ -802,11 +805,17 @@ public class ChangeEventService {
                 {"project", "프로젝트"}, {"task", "작업"}, {"issue", "이슈"},
                 {"external", "외부"}, {"internal", "내부"}, {"ref", "참조"},
                 {"lookup", "조회"}, {"search", "검색"}, {"filter", "필터"},
+                {"preference", "환경설정"}, {"preferred", "선호"},
+                {"reference", "참조 정보"},
         };
         String result = text;
         for (String[] mapping : domainMap) {
-            result = result.replace(mapping[0], mapping[1]);
+            // 단어 경계 기반 매칭 + 복수형 접미사(s/es/ies) 포함
+            String pattern = "\\b" + java.util.regex.Pattern.quote(mapping[0]) + "(?:ies|es|s)?\\b";
+            result = result.replaceAll(pattern, mapping[1]);
         }
+        // 혹시 남아 있는 한글 뒤 영어 복수형 접미사 제거 (예: "팀s" → "팀")
+        result = result.replaceAll("([가-힣])(ies|es|s)\\b", "$1");
         return result.trim();
     }
 
