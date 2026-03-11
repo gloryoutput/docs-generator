@@ -36,9 +36,11 @@ public class LlmDescriptionCompressorService {
             "당신은 IT 변경 보고서 작성 전문가입니다.\n" +
             "아래 '기능별 변경 내용'은 여러 파일을 수정하여 발생한 변경 사항을 기능별로 정리한 것입니다.\n" +
             "이것을 비개발자(경영진, 고객사)가 읽을 보고서에 들어갈 **핵심 변경 요약**으로 압축해 주세요.\n\n" +
-            "## 핵심 원칙: 같은 기능에 대한 여러 레이어 변경은 반드시 하나로 통합하세요\n" +
-            "예시: 'weather 기능 추가', 'weather 조회 기능', 'weather response 추가', 'weather 정보 관리' 등\n" +
-            "12개 항목 → '날씨(weather) 관리 기능 신규 추가' 1개로 압축\n\n" +
+            "## 핵심 원칙: 메뉴(상위 기능) 기준으로 비슷한 것들끼리 묶어서 압축하세요\n" +
+            "같은 메뉴에 속하는 하위 기능들은 반드시 하나의 카테고리로 통합하세요.\n" +
+            "예시: 'scout 관리 기능', 'weather 기능 추가', 'weather 조회', 'observation 관리' 등이\n" +
+            "모두 같은 카테고리에 있으면 → '스카우트 관리' 카테고리 아래에\n" +
+            "'스카우트 관리 기능 신규 추가', '스카우팅 스케줄에서 날씨 입력 기능 추가' 등으로 정리\n\n" +
             "## 압축 규칙\n" +
             "1. **카테고리당 최대 1~2개 문장**: 같은 키워드에 대한 항목이 여러 개면 반드시 하나로 통합\n" +
             "2. 기술 용어(Repository, Service, Controller, Entity, 필드, 메서드 등)를 사용하지 마세요\n" +
@@ -48,12 +50,10 @@ public class LlmDescriptionCompressorService {
             "   예: 'scout' → '스카우트 관리', 'evaluation' → '선수 평가', 'weather' → '날씨 정보'\n" +
             "6. 항목이 모두 다른 카테고리에 병합되어 비게 된 카테고리는 제외하세요\n" +
             "7. '조회 기능 추가', '관리 기능 추가', '데이터 관리 추가'가 모두 있으면 → '관리 기능 신규 추가'로 통합\n" +
-            "8. 카테고리명에 '/'가 포함된 경우(예: 'scout/weather'), 이는 상위 기능의 하위 기능을 나타냅니다.\n" +
-            "   반드시 상위 기능의 맥락에서 하위 기능을 서술하세요.\n" +
-            "   예: 'scout/weather' 카테고리 → 카테고리명을 '스카우트 관리'로 하고, '스카우팅 스케줄에서 날씨 입력 기능 추가' 형태로 서술\n" +
-            "   나쁜 예: '날씨 관리 기능 신규 추가' (하위 기능을 독립 기능처럼 서술)\n" +
-            "   좋은 예: '스카우팅 스케줄에서 날씨 입력 기능 추가' (상위 기능 맥락에서 서술)\n" +
-            "   '/' 앞의 상위 기능 카테고리에 해당 항목을 포함시키세요. 하위 기능만의 별도 카테고리를 만들지 마세요.\n\n" +
+            "8. 하나의 카테고리 안에 여러 하위 기능(예: scout 관련 항목 + weather 관련 항목)이 섞여 있으면,\n" +
+            "   하위 기능은 상위 기능의 맥락에서 서술하세요. 하위 기능을 독립 카테고리로 분리하지 마세요.\n" +
+            "   나쁜 예: '날씨 관리 기능 신규 추가' (하위 기능을 독립적으로 서술)\n" +
+            "   좋은 예: '스카우팅 스케줄에서 날씨 입력 기능 추가' (상위 기능 맥락에서 서술)\n\n" +
             "## 응답 형식\n" +
             "반드시 아래 JSON 객체 형식으로만 응답하세요. 다른 텍스트를 포함하지 마세요.\n" +
             "{\n" +
@@ -77,9 +77,9 @@ public class LlmDescriptionCompressorService {
      *
      * <p>처리 순서:
      * 1) 같은 키워드를 공유하는 카테고리 병합 (예: "API (scout)" + "비즈니스 로직 (scout)" → "scout")
-     * 2) 병합된 카테고리 내 중복 항목 제거
-     * 3) 키워드 기반 요약 압축 (같은 키워드의 유사 항목을 1~2문장으로 통합)
-     * 4) LLM이 있으면 추가로 자연어 정제, 없으면 3단계 결과 반환</p>
+     * 2) 키워드 기반 요약 압축 (같은 키워드의 유사 항목을 1~2문장으로 통합)
+     * 3) 메뉴 기준 그룹핑 (계층적 키워드를 상위 메뉴로 병합, 예: "scout/weather" → "scout")
+     * 4) LLM이 있으면 메뉴 기준 그룹핑된 데이터로 추가 압축, 없으면 3단계 결과 반환</p>
      *
      * @param changesByFeature 기능 영역 → 변경 설명 목록
      * @return 카테고리 → 압축된 변경 요약 목록
@@ -92,33 +92,36 @@ public class LlmDescriptionCompressorService {
         Map<String, Set<String>> merged = mergeCategories(changesByFeature);
         // 2단계: 키워드 기반 요약 압축 (LLM 없어도 동작)
         Map<String, List<String>> summarized = summarizeByKeyword(merged);
+        // 3단계: 메뉴 기준 그룹핑 (계층적 키워드를 상위 메뉴로 병합)
+        Map<String, List<String>> menuGrouped = groupByMenu(summarized);
         if (llmClient == null) {
             int totalBefore = merged.values().stream().mapToInt(Set::size).sum();
-            int totalAfter = summarized.values().stream().mapToInt(List::size).sum();
+            int totalAfter = menuGrouped.values().stream().mapToInt(List::size).sum();
             log.debug("LLM 비활성화 - 키워드 기반 요약 적용 ({}건 → {}건)", totalBefore, totalAfter);
-            return summarized;
+            return menuGrouped;
         }
-        // 3단계: LLM 추가 압축
-        int totalItems = summarized.values().stream().mapToInt(List::size).sum();
+        // 4단계: LLM 추가 압축 (메뉴 기준으로 그룹핑된 원본 데이터 전달)
+        Map<String, Set<String>> menuMerged = groupByMenuSet(merged);
+        int totalItems = menuMerged.values().stream().mapToInt(Set::size).sum();
         try {
-            String userPrompt = buildUserPrompt(merged);
+            String userPrompt = buildUserPrompt(menuMerged);
             String timestamp = LocalDateTime.now().format(FILE_FORMATTER);
             savePromptFile(timestamp, "compress_input", SYSTEM_PROMPT + "\n\n---\n\n" + userPrompt);
-            log.info("LLM 변경 설명 압축 시작 - {}개 카테고리, {}건 항목", merged.size(), totalItems);
+            log.info("LLM 변경 설명 압축 시작 - {}개 메뉴, {}건 항목", menuMerged.size(), totalItems);
             String result = llmClient.chat(SYSTEM_PROMPT, userPrompt);
             savePromptFile(timestamp, "compress_output", result);
             Map<String, List<String>> compressed = parseResponse(result);
             if (compressed == null || compressed.isEmpty()) {
-                log.warn("LLM 압축 결과가 비어있음 - 키워드 기반 요약 반환");
-                return summarized;
+                log.warn("LLM 압축 결과가 비어있음 - 메뉴 기준 요약 반환");
+                return menuGrouped;
             }
             int compressedItems = compressed.values().stream().mapToInt(List::size).sum();
-            log.info("LLM 변경 설명 압축 완료 - {}개 카테고리 {}건 → {}개 카테고리 {}건",
-                    summarized.size(), totalItems, compressed.size(), compressedItems);
+            log.info("LLM 변경 설명 압축 완료 - {}개 메뉴 {}건 → {}개 카테고리 {}건",
+                    menuMerged.size(), totalItems, compressed.size(), compressedItems);
             return compressed;
         } catch (Exception e) {
-            log.warn("LLM 변경 설명 압축 실패 - 키워드 기반 요약 반환. 원인: {}", e.getMessage());
-            return summarized;
+            log.warn("LLM 변경 설명 압축 실패 - 메뉴 기준 요약 반환. 원인: {}", e.getMessage());
+            return menuGrouped;
         }
     }
     /**
@@ -272,6 +275,58 @@ public class LlmDescriptionCompressorService {
         return categoryName;
     }
 
+    /**
+     * 요약 결과를 메뉴(상위 기능) 기준으로 그룹핑합니다.
+     *
+     * <p>계층적 키워드(parent/child)의 항목을 부모 키워드 그룹에 병합합니다.
+     * 예: "scout" 항목과 "scout/weather" 항목 → "scout" 하나로 통합</p>
+     *
+     * @param summarized 키워드별 요약 결과
+     * @return 메뉴 기준으로 그룹핑된 요약 결과
+     */
+    private Map<String, List<String>> groupByMenu(Map<String, List<String>> summarized) {
+        Map<String, List<String>> grouped = new LinkedHashMap<>();
+        for (Map.Entry<String, List<String>> entry : summarized.entrySet()) {
+            String menuKey = extractMenuKey(entry.getKey());
+            grouped.computeIfAbsent(menuKey, k -> new ArrayList<>()).addAll(entry.getValue());
+        }
+        if (grouped.size() < summarized.size()) {
+            log.debug("메뉴 기준 그룹핑: {}개 카테고리 → {}개 메뉴", summarized.size(), grouped.size());
+        }
+        return grouped;
+    }
+    /**
+     * 원본 항목(Set)을 메뉴(상위 기능) 기준으로 그룹핑합니다.
+     *
+     * <p>LLM에 전달할 데이터를 메뉴 단위로 묶어 LLM이 관련 항목을 함께 보고
+     * 상위 기능 맥락에서 압축할 수 있도록 합니다.</p>
+     *
+     * @param merged 키워드별 원본 항목
+     * @return 메뉴 기준으로 그룹핑된 원본 항목
+     */
+    private Map<String, Set<String>> groupByMenuSet(Map<String, Set<String>> merged) {
+        Map<String, Set<String>> grouped = new LinkedHashMap<>();
+        for (Map.Entry<String, Set<String>> entry : merged.entrySet()) {
+            String menuKey = extractMenuKey(entry.getKey());
+            grouped.computeIfAbsent(menuKey, k -> new LinkedHashSet<>()).addAll(entry.getValue());
+        }
+        return grouped;
+    }
+    /**
+     * 키워드에서 메뉴 키를 추출합니다.
+     *
+     * <p>계층적 키워드(parent/child)는 부모 키워드를 반환합니다.
+     * 단일 키워드는 그대로 반환합니다.</p>
+     *
+     * @param keyword 원본 키워드 (예: "scout/weather", "player")
+     * @return 메뉴 키 (예: "scout", "player")
+     */
+    private String extractMenuKey(String keyword) {
+        if (keyword.contains("/")) {
+            return keyword.split("/")[0];
+        }
+        return keyword;
+    }
     private Map<String, List<String>> toListMap(Map<String, Set<String>> setMap) {
         Map<String, List<String>> result = new LinkedHashMap<>();
         for (Map.Entry<String, Set<String>> entry : setMap.entrySet()) {
