@@ -19,4 +19,6 @@ public class AnalysisCreateRequest {
     private LocalDate startDate;
     private LocalDate endDate;
     private String requestedBy;
+    /** 여러 레포지토리를 하나의 프로젝트로 통합하여 보고서를 출력할지 여부 (기본값: true) */
+    private Boolean mergeRepositories;
 }

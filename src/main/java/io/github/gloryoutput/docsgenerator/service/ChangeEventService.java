@@ -56,7 +56,8 @@ public class ChangeEventService {
     public List<ChangeEvent> buildChangeEvents(UUID idAnalysisRequest, UUID idProject,
                                                 List<GitDiffResult> gitResults,
                                                 List<DbSchemaResult> schemaResults,
-                                                ApiAnalyzerResult apiResult) {
+                                                ApiAnalyzerResult apiResult,
+                                                boolean mergeRepositories) {
         // 1. AnalysisContext 구성
         AnalysisContext context = buildAnalysisContext(gitResults, schemaResults, apiResult);
         log.info("AnalysisContext 구성 완료 - layers: {}, sourceTypes: {}, keyword: {}",
@@ -95,7 +96,7 @@ public class ChangeEventService {
             }
         }
         if (!coveredCategories.contains("CODE_CHANGE")) {
-            events.addAll(buildCodeChangeEvents(idAnalysisRequest, idProject, gitResults));
+            events.addAll(buildCodeChangeEvents(idAnalysisRequest, idProject, gitResults, mergeRepositories));
         }
         // 5. 유사 이벤트 병합
         events = mergeEvents(events);
@@ -106,7 +107,7 @@ public class ChangeEventService {
         }
         events = normalizeEventTitles(events);
         // 7. LLM 기반 이벤트 강화 (제목/설명/심각도 개선)
-        events = llmChangeEventEnhancerService.enhance(events, idAnalysisRequest, idProject);
+        events = llmChangeEventEnhancerService.enhance(events, idAnalysisRequest, idProject, mergeRepositories);
         if (!events.isEmpty()) {
             changeEventRepository.saveAll(events);
             log.info("변경 이벤트 {}건 생성 완료 (분석 요청: {})", events.size(), idAnalysisRequest);
@@ -474,29 +475,62 @@ public class ChangeEventService {
      * 중복 파일을 제거하고 커밋 이력/레이어/키워드를 구조화합니다.</p>
      */
     private List<ChangeEvent> buildCodeChangeEvents(UUID idAnalysisRequest, UUID idProject,
-                                                     List<GitDiffResult> gitResults) {
+                                                     List<GitDiffResult> gitResults,
+                                                     boolean mergeRepositories) {
         List<ChangeEvent> events = new ArrayList<>();
-        for (GitDiffResult gitResult : gitResults) {
-            if (gitResult.getCommits() == null || gitResult.getCommits().isEmpty()) continue;
-            String repoName = gitResult.getRepositoryName();
-            // 유효한 커밋만 필터링
-            List<GitDiffResult.CommitInfo> validCommits = gitResult.getCommits().stream()
-                    .filter(c -> c.getFileChanges() != null && !c.getFileChanges().isEmpty())
-                    .toList();
-            if (validCommits.isEmpty()) continue;
-            String description = buildRepoDescription(repoName, validCommits);
-            String title = buildRepoTitle(repoName, validCommits);
-            events.add(ChangeEvent.builder()
-                    .idAnalysisRequest(idAnalysisRequest)
-                    .idProject(idProject)
-                    .category("CODE_CHANGE")
-                    .title(title)
-                    .description(description)
-                    .severity("LOW")
-                    .confidenceScore(0.8)
-                    .sourceType("GIT")
-                    .correlationKey(repoName)
-                    .build());
+        if (mergeRepositories) {
+            // 병합 모드: 모든 레포지토리의 커밋을 하나의 이벤트로 통합
+            List<GitDiffResult.CommitInfo> allValidCommits = new ArrayList<>();
+            List<String> repoNames = new ArrayList<>();
+            for (GitDiffResult gitResult : gitResults) {
+                if (gitResult.getCommits() == null || gitResult.getCommits().isEmpty()) continue;
+                List<GitDiffResult.CommitInfo> validCommits = gitResult.getCommits().stream()
+                        .filter(c -> c.getFileChanges() != null && !c.getFileChanges().isEmpty())
+                        .toList();
+                if (!validCommits.isEmpty()) {
+                    allValidCommits.addAll(validCommits);
+                    repoNames.add(gitResult.getRepositoryName());
+                }
+            }
+            if (!allValidCommits.isEmpty()) {
+                String mergedRepoName = String.join(", ", repoNames);
+                String description = buildRepoDescription(mergedRepoName, allValidCommits);
+                String title = "프로젝트 코드 변경 (" + allValidCommits.size() + "건 커밋)";
+                events.add(ChangeEvent.builder()
+                        .idAnalysisRequest(idAnalysisRequest)
+                        .idProject(idProject)
+                        .category("CODE_CHANGE")
+                        .title(title)
+                        .description(description)
+                        .severity("LOW")
+                        .confidenceScore(0.8)
+                        .sourceType("GIT")
+                        .correlationKey("PROJECT")
+                        .build());
+            }
+        } else {
+            // 분리 모드: 레포지토리별 개별 이벤트 생성
+            for (GitDiffResult gitResult : gitResults) {
+                if (gitResult.getCommits() == null || gitResult.getCommits().isEmpty()) continue;
+                String repoName = gitResult.getRepositoryName();
+                List<GitDiffResult.CommitInfo> validCommits = gitResult.getCommits().stream()
+                        .filter(c -> c.getFileChanges() != null && !c.getFileChanges().isEmpty())
+                        .toList();
+                if (validCommits.isEmpty()) continue;
+                String description = buildRepoDescription(repoName, validCommits);
+                String title = buildRepoTitle(repoName, validCommits);
+                events.add(ChangeEvent.builder()
+                        .idAnalysisRequest(idAnalysisRequest)
+                        .idProject(idProject)
+                        .category("CODE_CHANGE")
+                        .title(title)
+                        .description(description)
+                        .severity("LOW")
+                        .confidenceScore(0.8)
+                        .sourceType("GIT")
+                        .correlationKey(repoName)
+                        .build());
+            }
         }
         return events;
     }
@@ -546,8 +580,8 @@ public class ChangeEventService {
                 .limit(5)
                 .map(Map.Entry::getKey)
                 .toList();
-        // 기능별 변경 상세 수집 (changeSummary 기반)
-        Map<String, List<String>> changesByFeature = new LinkedHashMap<>();
+        // 기능별 변경 상세 수집 (changeSummary → 비개발자용 변환)
+        Map<String, Set<String>> changesByFeature = new LinkedHashMap<>();
         Set<String> processedFiles = new HashSet<>();
         for (GitDiffResult.CommitInfo commit : commits) {
             for (GitDiffResult.FileChange fc : commit.getFileChanges()) {
@@ -556,7 +590,8 @@ public class ChangeEventService {
                 String featureArea = detectFeatureArea(fc.getFilePath());
                 String changeSummary = fc.getChangeSummary();
                 if (changeSummary != null && !changeSummary.isEmpty()) {
-                    changesByFeature.computeIfAbsent(featureArea, k -> new ArrayList<>()).add(changeSummary);
+                    List<String> converted = convertToBusinessDescription(changeSummary);
+                    changesByFeature.computeIfAbsent(featureArea, k -> new LinkedHashSet<>()).addAll(converted);
                 }
             }
         }
@@ -574,10 +609,11 @@ public class ChangeEventService {
         if (!topKeywords.isEmpty()) {
             sb.append("\n관련 기능: ").append(String.join(", ", topKeywords));
         }
-        // 기능 영역별 변경 내용 (파일명 대신 기능 단위로 서술)
+        // 기능 영역별 변경 내용 (비개발자가 이해할 수 있는 기능 단위)
         if (!changesByFeature.isEmpty()) {
             sb.append("\n\n기능별 변경 내용:");
-            for (Map.Entry<String, List<String>> entry : changesByFeature.entrySet()) {
+            for (Map.Entry<String, Set<String>> entry : changesByFeature.entrySet()) {
+                if (entry.getValue().isEmpty()) continue;
                 sb.append("\n[").append(entry.getKey()).append("]");
                 for (String summary : entry.getValue()) {
                     sb.append("\n  - ").append(summary);
@@ -586,6 +622,194 @@ public class ChangeEventService {
         }
         return sb.toString();
     }
+    /**
+     * 개발자용 changeSummary를 비개발자가 이해할 수 있는 기능 설명으로 변환합니다.
+     *
+     * <p>기술 용어(필드명, 어노테이션, 줄 수 변경 등)를 제거하고,
+     * 도메인 엔티티명을 추출하여 업무 관점의 설명으로 변환합니다.</p>
+     *
+     * <p>변환 예시:
+     * - "추가 필드: evaluationRepository, observationNoteRepository" → "평가, 관찰 메모 정보 관리 추가"
+     * - "추가 메서드: findOrCreateTeamExternal" → "팀 외부 정보 조회/생성 기능 추가"
+     * - "새 클래스: ScoutObservationTagLookupService" → "스카우트 관찰 태그 조회 기능 신규 추가"</p>
+     */
+    private List<String> convertToBusinessDescription(String changeSummary) {
+        List<String> results = new ArrayList<>();
+        // 세미콜론으로 분리된 여러 변경사항 처리
+        String[] parts = changeSummary.split(";");
+        for (String part : parts) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) continue;
+            // 노이즈 필터링
+            if (trimmed.matches("^MODIFY\\s*\\([+\\-\\d/\\s]+lines?\\)$")) continue;
+            if (trimmed.matches("^[+\\-\\d/\\s]+lines?$")) continue;
+            if (trimmed.matches("^추가 어노테이션:.*")) continue;
+            if (trimmed.startsWith("MODIFY")) continue;
+            // 필드 추가 → 도메인 엔티티 추출
+            if (trimmed.startsWith("추가 필드:")) {
+                String fieldsPart = trimmed.substring("추가 필드:".length()).trim();
+                String[] fieldNames = fieldsPart.split(",");
+                List<String> entityNames = new ArrayList<>();
+                boolean hasServiceField = false;
+                for (String fieldName : fieldNames) {
+                    String fn = fieldName.trim();
+                    if (fn.endsWith("Repository")) {
+                        entityNames.add(toReadableName(fn.replace("Repository", "")));
+                    } else if (fn.endsWith("Service")) {
+                        String name = toReadableName(fn.replace("Service", ""));
+                        results.add(name + " 처리 기능 연동");
+                        hasServiceField = true;
+                    } else {
+                        entityNames.add(toReadableName(fn));
+                    }
+                }
+                if (!entityNames.isEmpty()) {
+                    results.add(String.join(", ", entityNames) + " 정보 관리 추가");
+                }
+                continue;
+            }
+            // 새 클래스 → 기능명 추출
+            if (trimmed.startsWith("새 클래스:")) {
+                String className = trimmed.substring("새 클래스:".length()).trim();
+                String featureName = extractFeatureName(className);
+                results.add(featureName + " 기능 신규 추가");
+                continue;
+            }
+            // 메서드 추가 → 동작 + 대상 추출
+            if (trimmed.startsWith("추가 메서드:")) {
+                String methodsPart = trimmed.substring("추가 메서드:".length()).trim();
+                for (String methodName : methodsPart.split(",")) {
+                    String desc = convertMethodToAction(methodName.trim());
+                    if (desc != null) results.add(desc);
+                }
+                continue;
+            }
+            // 그 외: 기술 용어 제거 후 남은 내용
+            String cleaned = trimmed
+                    .replaceAll("\\([+\\-\\d/\\s]+lines?\\)", "")
+                    .replaceAll("@\\w+", "")
+                    .trim();
+            if (!cleaned.isEmpty() && !cleaned.matches("^\\s*$")) {
+                results.add(cleaned);
+            }
+        }
+        return results.stream().distinct().toList();
+    }
+    /** CamelCase 이름에서 도메인 의미를 추출하여 읽기 쉬운 한국어로 변환합니다. */
+    private String toReadableName(String camelCase) {
+        if (camelCase == null || camelCase.isBlank()) return "";
+        // CamelCase 분리
+        String spaced = camelCase
+                .replaceAll("([a-z])([A-Z])", "$1 $2")
+                .replaceAll("([A-Z]+)([A-Z][a-z])", "$1 $2")
+                .toLowerCase().trim();
+        // 도메인 용어 한국어 매핑
+        return applyDomainTerms(spaced);
+    }
+    /** 클래스명에서 기능명을 추출합니다. (접미사 제거 + 도메인 변환) */
+    private String extractFeatureName(String className) {
+        String name = className
+                .replaceAll("(Service|Controller|Repository|Impl|Handler|Listener|Mapper|Converter|Dto|Entity)$", "")
+                .trim();
+        if (name.isEmpty()) return className;
+        return toReadableName(name);
+    }
+    /**
+     * 메서드명을 "동작 + 대상" 형식의 업무 설명으로 변환합니다.
+     * 예: findOrCreateTeamExternal → "팀 외부 정보 조회/생성 기능 추가"
+     */
+    private String convertMethodToAction(String methodName) {
+        if (methodName == null || methodName.isBlank()) return null;
+        String spaced = methodName
+                .replaceAll("([a-z])([A-Z])", "$1 $2")
+                .replaceAll("([A-Z]+)([A-Z][a-z])", "$1 $2")
+                .toLowerCase().trim();
+        // 동작부와 대상부 분리
+        String action = "";
+        String target = spaced;
+        // 동사 패턴 매칭 (가장 긴 패턴부터)
+        String[][] actionPatterns = {
+                {"find or create ", "조회/생성"},
+                {"find all ", "전체 조회"}, {"find by ", "조건 조회"}, {"find ", "조회"},
+                {"get all ", "전체 조회"}, {"get ", "조회"},
+                {"create ", "생성"}, {"save ", "저장"}, {"add ", "추가"},
+                {"update ", "수정"}, {"edit ", "수정"}, {"modify ", "수정"},
+                {"delete ", "삭제"}, {"remove ", "삭제"},
+                {"validate ", "검증"}, {"check ", "확인"}, {"verify ", "검증"},
+                {"convert ", "변환"}, {"transform ", "변환"},
+                {"build ", "구성"}, {"generate ", "생성"},
+                {"calculate ", "계산"}, {"compute ", "계산"},
+                {"process ", "처리"}, {"execute ", "실행"},
+                {"send ", "전송"}, {"notify ", "알림"},
+                {"search ", "검색"}, {"filter ", "필터링"},
+                {"import ", "가져오기"}, {"export ", "내보내기"},
+                {"sync ", "동기화"}, {"load ", "로딩"}, {"init ", "초기화"},
+                {"is ", ""}, {"has ", ""}, {"can ", ""},
+        };
+        for (String[] pattern : actionPatterns) {
+            if (spaced.startsWith(pattern[0])) {
+                action = pattern[1];
+                target = spaced.substring(pattern[0].length()).trim();
+                break;
+            }
+        }
+        String targetKr = applyDomainTerms(target);
+        if (action.isEmpty()) {
+            // is/has/can 같은 확인 메서드는 건너뜀
+            return null;
+        }
+        return targetKr + " " + action + " 기능 추가";
+    }
+    /**
+     * 영문 도메인 용어를 한국어로 변환합니다.
+     * 매핑되지 않는 단어는 원문 그대로 유지합니다.
+     */
+    private String applyDomainTerms(String text) {
+        // 순서 중요: 긴 복합어부터 매핑
+        String[][] domainMap = {
+                // 복합 도메인 용어
+                {"observation note", "관찰 메모"}, {"observation tag", "관찰 태그"},
+                {"dominant foot ref", "주발 정보"}, {"dominant foot", "주발"},
+                {"secondary position", "보조 포지션"}, {"primary position", "주 포지션"},
+                {"team history", "팀 이력"}, {"team external", "팀 외부 정보"},
+                {"note priority ref", "메모 우선순위"}, {"note priority", "메모 우선순위"},
+                {"scout candidate", "스카우트 후보"}, {"content block", "콘텐츠 블록"},
+                {"change event", "변경 이벤트"}, {"analysis request", "분석 요청"},
+                {"file change", "파일 변경"}, {"api endpoint", "API 엔드포인트"},
+                {"schema change", "스키마 변경"}, {"project repository", "프로젝트 저장소"},
+                {"user role", "사용자 권한"}, {"access token", "접근 토큰"},
+                // 단일 도메인 용어
+                {"scout", "스카우트"}, {"player", "선수"}, {"team", "팀"},
+                {"match", "경기"}, {"league", "리그"}, {"season", "시즌"},
+                {"evaluation", "평가"}, {"observation", "관찰"}, {"assessment", "평가"},
+                {"candidate", "후보"}, {"position", "포지션"}, {"transfer", "이적"},
+                {"contract", "계약"}, {"salary", "급여"}, {"agent", "에이전트"},
+                {"schedule", "일정"}, {"event", "이벤트"}, {"note", "메모"},
+                {"tag", "태그"}, {"category", "카테고리"}, {"priority", "우선순위"},
+                {"report", "보고서"}, {"document", "문서"}, {"template", "템플릿"},
+                {"notification", "알림"}, {"message", "메시지"}, {"comment", "댓글"},
+                {"user", "사용자"}, {"member", "회원"}, {"admin", "관리자"},
+                {"role", "역할"}, {"permission", "권한"}, {"auth", "인증"},
+                {"profile", "프로필"}, {"setting", "설정"}, {"config", "설정"},
+                {"dashboard", "대시보드"}, {"statistics", "통계"}, {"summary", "요약"},
+                {"history", "이력"}, {"log", "로그"}, {"record", "기록"},
+                {"status", "상태"}, {"type", "유형"}, {"level", "레벨"},
+                {"content", "콘텐츠"}, {"block", "블록"}, {"page", "페이지"},
+                {"image", "이미지"}, {"file", "파일"}, {"attachment", "첨부"},
+                {"order", "주문"}, {"payment", "결제"}, {"invoice", "청구서"},
+                {"product", "상품"}, {"item", "항목"}, {"price", "가격"},
+                {"customer", "고객"}, {"client", "클라이언트"}, {"company", "회사"},
+                {"project", "프로젝트"}, {"task", "작업"}, {"issue", "이슈"},
+                {"external", "외부"}, {"internal", "내부"}, {"ref", "참조"},
+                {"lookup", "조회"}, {"search", "검색"}, {"filter", "필터"},
+        };
+        String result = text;
+        for (String[] mapping : domainMap) {
+            result = result.replace(mapping[0], mapping[1]);
+        }
+        return result.trim();
+    }
+
     /**
      * 파일 경로에서 기능 영역을 추출합니다.
      *

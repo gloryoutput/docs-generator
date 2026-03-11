@@ -40,15 +40,20 @@ public class AnalysisRequest extends BaseEntity {
     private LocalDateTime startedAt;
     @Column(name = "completed_at")
     private LocalDateTime completedAt;
+    /** 여러 레포지토리를 하나의 프로젝트로 통합 출력할지 여부 */
+    @Column(name = "merge_repositories", nullable = false)
+    private boolean mergeRepositories;
 
     @Builder
-    public AnalysisRequest(UUID idProject, String requestedBy, LocalDate startDate, LocalDate endDate) {
+    public AnalysisRequest(UUID idProject, String requestedBy, LocalDate startDate, LocalDate endDate,
+                           Boolean mergeRepositories) {
         this.idAnalysisRequest = UUID.randomUUID();
         this.idProject = idProject;
         this.requestedBy = requestedBy;
         this.startDate = startDate;
         this.endDate = endDate;
         this.status = "PENDING";
+        this.mergeRepositories = mergeRepositories != null ? mergeRepositories : true;
     }
 
     public void start() {

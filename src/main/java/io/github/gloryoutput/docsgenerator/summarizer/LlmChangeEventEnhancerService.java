@@ -37,20 +37,21 @@ public class LlmChangeEventEnhancerService {
     private static final String SYSTEM_PROMPT =
             "당신은 소프트웨어 변경 관리(Change Management) 전문가입니다.\n" +
             "아래 변경 이벤트 목록을 분석하여 각 이벤트의 제목, 설명, 심각도를 공식 보고서에 적합한 수준으로 개선해 주세요.\n\n" +
-            "## 핵심 원칙: 기능 중심 서술\n" +
-            "- 파일명, 클래스명, 패키지 경로를 직접 나열하지 마세요.\n" +
-            "- 대신 '어떤 기능이 어떻게 변경되었는가'를 중심으로 서술하세요.\n" +
-            "- 예시 (나쁜 예): 'UserService.java, UserController.java, UserDto.java 수정'\n" +
-            "- 예시 (좋은 예): '사용자 관리 기능의 조회 로직 및 API 응답 구조가 개선되었습니다'\n\n" +
+            "## 핵심 원칙: 비개발자도 이해할 수 있는 기능 중심 서술\n" +
+            "- 이 보고서의 독자는 비개발자(경영진, 고객사 담당자)입니다.\n" +
+            "- 파일명, 클래스명, 패키지 경로, 메서드명, 변수명을 절대 포함하지 마세요.\n" +
+            "- Repository, Service, Controller, Entity 등 개발 용어를 사용하지 마세요.\n" +
+            "- '어떤 업무/기능이 어떻게 개선되었는가'를 중심으로 서술하세요.\n" +
+            "- 예시 (나쁜 예): '추가 필드: dominantFootRefRepository, 추가 메서드: findOrCreateTeamExternal'\n" +
+            "- 예시 (좋은 예): '선수 정보 관리에 주발 정보 항목이 추가되고, 팀 외부 데이터 연동 기능이 개선되었습니다'\n\n" +
             "## 제목 작성 규칙\n" +
             "- 간결하고 명확한 한국어로 작성 (80자 이내)\n" +
-            "- '~기능 추가', '~처리 방식 개선', '~모듈 제거' 등 기능 관점의 변경 유형이 드러나는 형태\n" +
-            "- 영문 기술 용어(API, DB, Entity 등)는 그대로 유지\n\n" +
+            "- '~기능 추가', '~처리 방식 개선', '~관리 기능 확장' 등 업무 관점의 변경 유형이 드러나는 형태\n" +
+            "- 고유명사(시스템명, 서비스명)는 그대로 유지\n\n" +
             "## 설명 작성 규칙\n" +
             "- 격식체 한국어 사용 (~했습니다, ~되었습니다)\n" +
-            "- '어떤 기능이 → 어떻게 변경되었고 → 왜/어떤 영향이 있는지' 순서로 서술\n" +
-            "- 커밋 메시지나 변경 요약에서 기능적 의미를 추출하여 서술\n" +
-            "- 파일 수가 많은 경우 '관련 N개 모듈 수정' 형태로 축약\n" +
+            "- '어떤 업무 기능이 → 어떻게 변경되었고 → 사용자/업무에 어떤 영향이 있는지' 순서로 서술\n" +
+            "- 개발 내부 구현 상세(필드 추가, 메서드 추가, 어노테이션 등)는 언급하지 않음\n" +
             "- 기존 정보에서 유추할 수 없는 새로운 사실을 추가하지 않음\n\n" +
             "## 심각도 판단 기준\n" +
             "- **HIGH**: DB 스키마 변경, 인증/보안 변경, 기존 API 삭제/호환성 파괴, 대규모 리팩토링\n" +
@@ -93,14 +94,15 @@ public class LlmChangeEventEnhancerService {
      * @param idProject 프로젝트 ID
      * @return LLM으로 강화된 변경 이벤트 목록 또는 원본
      */
-    public List<ChangeEvent> enhance(List<ChangeEvent> events, UUID idAnalysisRequest, UUID idProject) {
+    public List<ChangeEvent> enhance(List<ChangeEvent> events, UUID idAnalysisRequest, UUID idProject,
+                                      boolean mergeRepositories) {
         if (llmClient == null || events == null || events.isEmpty()) {
             log.debug("LLM ChangeEvent 강화 건너뜀 - client: {}, events: {}",
                     llmClient != null ? "있음" : "없음", events != null ? events.size() : 0);
             return events;
         }
         try {
-            String userPrompt = buildUserPrompt(events);
+            String userPrompt = buildUserPrompt(events, mergeRepositories);
             String timestamp = LocalDateTime.now().format(FILE_FORMATTER);
             savePromptFile(timestamp, "enhance_input", SYSTEM_PROMPT + "\n\n---\n\n" + userPrompt);
             log.info("LLM ChangeEvent 강화 시작 - {}건 이벤트", events.size());
@@ -121,8 +123,13 @@ public class LlmChangeEventEnhancerService {
     /**
      * 이벤트 목록을 LLM에 전달할 구조화된 프롬프트로 변환합니다.
      */
-    private String buildUserPrompt(List<ChangeEvent> events) {
+    private String buildUserPrompt(List<ChangeEvent> events, boolean mergeRepositories) {
         StringBuilder sb = new StringBuilder();
+        if (mergeRepositories) {
+            sb.append("## 작성 모드: 프로젝트 통합\n");
+            sb.append("여러 레포지토리의 변경 사항을 하나의 프로젝트로 통합하여 서술하세요.\n");
+            sb.append("개별 레포지토리명을 언급하지 말고 통합된 관점으로 작성하세요.\n\n");
+        }
         sb.append("## 변경 이벤트 목록 (").append(events.size()).append("건)\n\n");
         for (int i = 0; i < events.size(); i++) {
             ChangeEvent event = events.get(i);

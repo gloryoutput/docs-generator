@@ -85,11 +85,13 @@ public class AnalysisService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "프로젝트를 찾을 수 없습니다: " + request.getIdProject()));
         // 분석 요청 생성
+        boolean mergeRepos = request.getMergeRepositories() == null || request.getMergeRepositories();
         AnalysisRequest analysisRequest = AnalysisRequest.builder()
                 .idProject(project.getIdProject())
                 .requestedBy(request.getRequestedBy())
                 .startDate(request.getStartDate())
                 .endDate(request.getEndDate())
+                .mergeRepositories(mergeRepos)
                 .build();
         analysisRequest.start();
         analysisRequestRepository.save(analysisRequest);
@@ -134,13 +136,14 @@ public class AnalysisService {
                 project.getIdProject(),
                 filteredGitResults,
                 filteredSchemaResults,
-                filteredApiResult);
+                filteredApiResult,
+                mergeRepos);
         // 상관관계 분석 (Step 9)
         List<CorrelatedGroup> groups = correlationService.correlateEvents(changeEvents);
         // 초안 생성 (Step 10)
         String draft = draftGeneratorService.generateDraft(groups);
         // LLM 요약 - 초안 문장 다듬기 (Step 10.5)
-        String polishedDraft = llmSummarizerService.summarize(groups, draft);
+        String polishedDraft = llmSummarizerService.summarize(groups, draft, mergeRepos);
         // 최종 보고서 생성 및 저장 (Step 11)
         reportGeneratorService.generateAndSave(analysisRequest, project.getProjectName(), groups, polishedDraft);
         analysisRequest.complete();

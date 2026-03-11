@@ -101,9 +101,9 @@ public class LlmSummarizerService {
      * @param originalDraft 보고서 초안 (Markdown)
      * @return 다듬어진 보고서 텍스트 또는 원본 초안
      */
-    public String summarize(List<CorrelatedGroup> groups, String originalDraft) {
+    public String summarize(List<CorrelatedGroup> groups, String originalDraft, boolean mergeRepositories) {
         try {
-            String userPrompt = buildUserPrompt(groups, originalDraft);
+            String userPrompt = buildUserPrompt(groups, originalDraft, mergeRepositories);
             String timestamp = LocalDateTime.now().format(FILE_FORMATTER);
             saveInputFile(timestamp, SYSTEM_PROMPT, userPrompt);
             if (llmClient == null) {
@@ -252,18 +252,32 @@ public class LlmSummarizerService {
     /**
      * 시스템 프롬프트에 전달할 사용자 프롬프트를 구성합니다.
      */
-    private String buildUserPrompt(List<CorrelatedGroup> groups, String originalDraft) {
+    private String buildUserPrompt(List<CorrelatedGroup> groups, String originalDraft,
+                                    boolean mergeRepositories) {
         String summary = buildSummarySection(groups);
         String eventsMarkdown = buildEventsMarkdown(groups);
         String impactSummary = buildImpactSummary(groups);
-        return "## 변경 요약 통계\n\n" + summary +
-                "\n## 영향 범위 정보\n\n" + impactSummary +
-                "\n## 변경 이벤트 상세 (참고 자료)\n\n" + eventsMarkdown +
-                "\n## 보고서 초안 (다듬을 대상)\n\n" + originalDraft +
-                "\n---\n\n" +
-                "위 정보를 참고하여 '보고서 초안'을 고객사·경영진에게 제출할 수 있는 공식 보고서 수준으로 다듬어 주세요.\n" +
-                "반드시 시스템 프롬프트의 '출력 구조'에 명시된 6개 섹션(목적, 발생한 문제, 문제 원인, 문제 해결 과정, 결과, 개선 및 예방 방안)을 모두 ### 제목으로 구분하여 포함하세요.\n" +
-                "영향 범위 정보와 고위험 변경 사항은 '결과' 및 '개선 및 예방 방안' 섹션에 자연스럽게 반영하세요.\n" +
-                "결과물은 Markdown 본문만 출력하세요. 부가 설명이나 인사말은 포함하지 마세요.";
+        StringBuilder sb = new StringBuilder();
+        sb.append("## 변경 요약 통계\n\n").append(summary);
+        sb.append("\n## 영향 범위 정보\n\n").append(impactSummary);
+        sb.append("\n## 변경 이벤트 상세 (참고 자료)\n\n").append(eventsMarkdown);
+        sb.append("\n## 보고서 초안 (다듬을 대상)\n\n").append(originalDraft);
+        sb.append("\n---\n\n");
+        if (mergeRepositories) {
+            sb.append("## 중요: 통합 프로젝트 관점 서술\n");
+            sb.append("이 보고서는 여러 레포지토리(서버, 프론트엔드 등)를 **하나의 프로젝트**로 통합하여 작성해야 합니다.\n");
+            sb.append("개별 레포지토리명(예: football-api, football-web 등)을 직접 언급하지 말고, ");
+            sb.append("'본 프로젝트', '시스템' 등의 통합된 관점으로 서술하세요.\n");
+            sb.append("서버 측 변경과 화면 측 변경이 있다면 하나의 기능 개선 흐름으로 자연스럽게 통합하여 서술하세요.\n\n");
+        } else {
+            sb.append("## 중요: 레포지토리별 구분 서술\n");
+            sb.append("이 보고서는 각 레포지토리(서버, 프론트엔드 등)의 변경 사항을 **구분하여** 작성해야 합니다.\n");
+            sb.append("각 레포지토리에서 발생한 변경을 별도로 서술하되, 관련 있는 변경끼리 인과관계를 명시하세요.\n\n");
+        }
+        sb.append("위 정보를 참고하여 '보고서 초안'을 고객사·경영진에게 제출할 수 있는 공식 보고서 수준으로 다듬어 주세요.\n");
+        sb.append("반드시 시스템 프롬프트의 '출력 구조'에 명시된 6개 섹션(목적, 발생한 문제, 문제 원인, 문제 해결 과정, 결과, 개선 및 예방 방안)을 모두 ### 제목으로 구분하여 포함하세요.\n");
+        sb.append("영향 범위 정보와 고위험 변경 사항은 '결과' 및 '개선 및 예방 방안' 섹션에 자연스럽게 반영하세요.\n");
+        sb.append("결과물은 Markdown 본문만 출력하세요. 부가 설명이나 인사말은 포함하지 마세요.");
+        return sb.toString();
     }
 }
