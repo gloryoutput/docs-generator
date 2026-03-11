@@ -5,41 +5,32 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.gloryoutput.docsgenerator.summarizer.LlmClient;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
-import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 /**
  * Anthropic Claude Messages API를 사용하는 LlmClient 구현체
  *
- * <p>app.llm.provider=anthropic일 때 빈으로 등록됩니다.
+ * <p>LlmConfig에서 app.llm.enabled=true, app.llm.provider=anthropic일 때 빈으로 등록됩니다.
  * Anthropic Messages API(/v1/messages) 형식으로 요청을 보내고 응답을 파싱합니다.</p>
  *
  * @author Lodong
  * @since 1.0.0
  */
-@Component
-@ConditionalOnProperty(name = "app.llm.provider", havingValue = "anthropic")
 @Slf4j
 public class AnthropicLlmClient implements LlmClient {
     private static final String ANTHROPIC_VERSION = "2023-06-01";
     private static final int MAX_TOKENS = 4096;
     private static final double TEMPERATURE = 0.3;
     private final ObjectMapper objectMapper = new ObjectMapper();
-    @Value("${app.llm.api-url:https://api.anthropic.com}")
-    private String apiUrl;
-    @Value("${app.llm.api-key:}")
-    private String apiKey;
-    @Value("${app.llm.model:claude-sonnet-4-20250514}")
-    private String model;
-    private RestClient restClient;
+    private final String apiKey;
+    private final String model;
+    private final RestClient restClient;
 
-    @PostConstruct
-    void init() {
+    public AnthropicLlmClient(String apiUrl, String apiKey, String model) {
+        this.apiKey = apiKey;
+        this.model = model;
         this.restClient = RestClient.builder()
                 .baseUrl(apiUrl)
                 .build();

@@ -12,13 +12,13 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * 최종 Markdown 보고서를 생성하고 저장하는 서비스
  *
- * <p>분석 요청 정보, 상관관계 그룹, 초안 내용을 종합하여
- * 템플릿 기반의 완성된 Markdown 보고서를 만듭니다.</p>
+ * <p>분석 요청 정보, 상관관계 그룹, LLM이 다듬은 초안을 종합하여
+ * 원본 보고서 형식(목적, 문제 정의, 해결 과정, 결과, 개선 방안)에 맞는
+ * Markdown 보고서를 만듭니다.</p>
  *
  * @author Lodong
  * @since 1.0.0
@@ -28,16 +28,20 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ReportGeneratorService {
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-    private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final DateTimeFormatter DATE_KR_FORMATTER = DateTimeFormatter.ofPattern("yyyy년 MM월 dd일");
     private final ReportRepository reportRepository;
 
     /**
      * 최종 Markdown 보고서를 생성합니다.
      *
+     * <p>원본 보고서(고영 오류 수정 완료 보고서) 형식을 따라
+     * 목적, 발생한 문제, 문제 원인, 문제 해결 과정, 결과, 개선 및 예방 방안
+     * 6개 섹션을 포함하는 보고서를 생성합니다.</p>
+     *
      * @param analysisRequest 분석 요청 엔티티
      * @param projectName 프로젝트명
      * @param groups 상관관계 그룹 목록
-     * @param draft 초안 Markdown 텍스트
+     * @param draft LLM이 다듬은 초안 (6개 섹션 포함)
      * @return 완성된 Markdown 보고서 텍스트
      */
     public String generateReport(AnalysisRequest analysisRequest, String projectName,
@@ -45,29 +49,51 @@ public class ReportGeneratorService {
         int totalEvents = groups.stream()
                 .mapToInt(g -> g.getEvents() != null ? g.getEvents().size() : 0)
                 .sum();
-        String generatedAt = LocalDateTime.now().format(DATETIME_FORMATTER);
         String startDate = analysisRequest.getStartDate().format(DATE_FORMATTER);
         String endDate = analysisRequest.getEndDate().format(DATE_FORMATTER);
+        String createdDate = LocalDateTime.now().format(DATE_KR_FORMATTER);
+        // 카테고리별·심각도별 통계
+        Map<String, Integer> categoryCount = new LinkedHashMap<>();
+        Map<String, Integer> severityCount = new LinkedHashMap<>();
+        for (CorrelatedGroup group : groups) {
+            if (group.getEvents() == null) continue;
+            for (ChangeEvent event : group.getEvents()) {
+                categoryCount.merge(event.getCategory(), 1, Integer::sum);
+                severityCount.merge(event.getSeverity(), 1, Integer::sum);
+            }
+        }
         StringBuilder report = new StringBuilder();
-        // 헤더
-        report.append("# 자동 보고서\n\n");
-        // 작업 개요
-        report.append("## 작업 개요\n\n");
+        // 보고서 제목
+        report.append("# 소프트웨어 변경 보고서\n\n");
+        report.append("작성일자: ").append(createdDate).append("\n\n");
+        // 메타 정보 테이블
         report.append("| 항목 | 내용 |\n");
         report.append("|------|------|\n");
         report.append("| 프로젝트 | ").append(projectName).append(" |\n");
         report.append("| 분석 기간 | ").append(startDate).append(" ~ ").append(endDate).append(" |\n");
-        report.append("| 생성 일시 | ").append(generatedAt).append(" |\n");
-        report.append("| 총 변경 이벤트 | ").append(totalEvents).append("건 |\n\n");
-        // 주요 변경 사항
-        report.append("## 주요 변경 사항\n\n");
+        report.append("| 총 변경 이벤트 | ").append(totalEvents).append("건 |\n");
+        if (!categoryCount.isEmpty()) {
+            StringBuilder catSummary = new StringBuilder();
+            categoryCount.forEach((k, v) -> {
+                if (!catSummary.isEmpty()) catSummary.append(", ");
+                catSummary.append(formatCategoryName(k)).append(" ").append(v).append("건");
+            });
+            report.append("| 변경 유형 | ").append(catSummary).append(" |\n");
+        }
+        if (!severityCount.isEmpty()) {
+            StringBuilder sevSummary = new StringBuilder();
+            severityCount.forEach((k, v) -> {
+                if (!sevSummary.isEmpty()) sevSummary.append(", ");
+                sevSummary.append(formatSeverityName(k)).append(" ").append(v).append("건");
+            });
+            report.append("| 심각도 분포 | ").append(sevSummary).append(" |\n");
+        }
+        report.append("\n");
+        // LLM이 다듬은 6개 섹션 본문 (목적, 발생한 문제, 문제 원인, 문제 해결 과정, 결과, 개선 및 예방 방안)
         report.append(draft);
-        // 영향 범위
-        report.append("## 영향 범위\n\n");
-        report.append(buildImpactScope(groups));
-        // 확인 필요 사항
-        report.append("## 확인 필요 사항\n\n");
-        report.append(buildHighSeveritySection(groups));
+        if (!draft.endsWith("\n")) {
+            report.append("\n");
+        }
         log.info("최종 보고서 생성 완료 (프로젝트: {}, 이벤트: {}건)", projectName, totalEvents);
         return report.toString();
     }
@@ -78,7 +104,7 @@ public class ReportGeneratorService {
      * @param analysisRequest 분석 요청 엔티티
      * @param projectName 프로젝트명
      * @param groups 상관관계 그룹 목록
-     * @param draft 초안 Markdown 텍스트
+     * @param draft LLM이 다듬은 초안 (6개 섹션 포함)
      * @return 저장된 Report 엔티티
      */
     @Transactional
@@ -96,79 +122,27 @@ public class ReportGeneratorService {
     }
 
     /**
-     * 영향 범위 섹션을 생성합니다 (테이블, endpoint, 코드 모듈).
+     * 카테고리 코드를 한국어 표시명으로 변환합니다.
      */
-    private String buildImpactScope(List<CorrelatedGroup> groups) {
-        Set<String> tables = new LinkedHashSet<>();
-        Set<String> endpoints = new LinkedHashSet<>();
-        Set<String> repositories = new LinkedHashSet<>();
-        for (CorrelatedGroup group : groups) {
-            if (group.getEvents() == null) continue;
-            for (ChangeEvent event : group.getEvents()) {
-                switch (event.getCategory()) {
-                    case "SCHEMA_CHANGE":
-                        if (event.getCorrelationKey() != null) {
-                            tables.add(event.getCorrelationKey());
-                        }
-                        break;
-                    case "API_CHANGE":
-                        if (event.getCorrelationKey() != null) {
-                            endpoints.add(event.getCorrelationKey());
-                        }
-                        break;
-                    case "CODE_CHANGE":
-                        if (event.getCorrelationKey() != null) {
-                            repositories.add(event.getCorrelationKey());
-                        }
-                        break;
-                    default:
-                        break;
-                }
-            }
-        }
-        StringBuilder scope = new StringBuilder();
-        if (!tables.isEmpty()) {
-            scope.append("**영향받는 테이블:**\n");
-            tables.forEach(t -> scope.append("- ").append(t).append("\n"));
-            scope.append("\n");
-        }
-        if (!endpoints.isEmpty()) {
-            scope.append("**영향받는 API:**\n");
-            endpoints.forEach(e -> scope.append("- ").append(e).append("\n"));
-            scope.append("\n");
-        }
-        if (!repositories.isEmpty()) {
-            scope.append("**영향받는 레포지토리:**\n");
-            repositories.forEach(r -> scope.append("- ").append(r).append("\n"));
-            scope.append("\n");
-        }
-        if (scope.length() == 0) {
-            scope.append("영향 범위 없음\n\n");
-        }
-        return scope.toString();
+    private String formatCategoryName(String category) {
+        return switch (category) {
+            case "SCHEMA_CHANGE" -> "DB 스키마";
+            case "API_CHANGE" -> "API";
+            case "CODE_CHANGE" -> "코드";
+            case "DEPENDENCY_CHANGE" -> "의존성";
+            default -> category;
+        };
     }
 
     /**
-     * HIGH severity 이벤트를 모아 확인 필요 사항 섹션을 생성합니다.
+     * 심각도 코드를 한국어 표시명으로 변환합니다.
      */
-    private String buildHighSeveritySection(List<CorrelatedGroup> groups) {
-        List<ChangeEvent> highEvents = groups.stream()
-                .filter(g -> g.getEvents() != null)
-                .flatMap(g -> g.getEvents().stream())
-                .filter(e -> "HIGH".equals(e.getSeverity()))
-                .collect(Collectors.toList());
-        if (highEvents.isEmpty()) {
-            return "확인이 필요한 고위험 변경 사항이 없습니다.\n";
-        }
-        StringBuilder section = new StringBuilder();
-        for (ChangeEvent event : highEvents) {
-            section.append("- **[").append(event.getSeverity()).append("]** ")
-                    .append(event.getTitle());
-            if (event.getDescription() != null) {
-                section.append(" - ").append(event.getDescription());
-            }
-            section.append("\n");
-        }
-        return section.toString();
+    private String formatSeverityName(String severity) {
+        return switch (severity) {
+            case "HIGH" -> "높음(HIGH)";
+            case "MEDIUM" -> "보통(MEDIUM)";
+            case "LOW" -> "낮음(LOW)";
+            default -> severity;
+        };
     }
 }

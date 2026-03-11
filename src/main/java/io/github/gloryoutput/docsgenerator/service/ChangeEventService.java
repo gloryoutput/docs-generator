@@ -8,6 +8,7 @@ import io.github.gloryoutput.docsgenerator.domain.changeevent.ChangeEventReposit
 import io.github.gloryoutput.docsgenerator.service.RuleEngineService.AnalysisContext;
 import io.github.gloryoutput.docsgenerator.service.RuleEngineService.ChangeEventTemplate;
 import io.github.gloryoutput.docsgenerator.service.RuleEngineService.MatchedRule;
+import io.github.gloryoutput.docsgenerator.summarizer.LlmChangeEventEnhancerService;
 import io.github.gloryoutput.docsgenerator.util.LayerDetector;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +32,7 @@ import java.util.*;
 public class ChangeEventService {
     private final ChangeEventRepository changeEventRepository;
     private final RuleEngineService ruleEngineService;
+    private final LlmChangeEventEnhancerService llmChangeEventEnhancerService;
 
     /**
      * 분석 결과로부터 변경 이벤트를 생성하고 저장합니다.
@@ -40,7 +42,8 @@ public class ChangeEventService {
      * 2) 규칙 엔진 매칭
      * 3) 규칙 기반 이벤트 생성 + 미매칭 증거의 폴백 이벤트 생성
      * 4) 유사 이벤트 병합
-     * 5) 제목/설명 정규화</p>
+     * 5) 제목/설명 정규화
+     * 6) LLM 기반 이벤트 강화 (제목/설명/심각도 개선)</p>
      *
      * @param idAnalysisRequest 분석 요청 ID
      * @param idProject 프로젝트 ID
@@ -102,6 +105,8 @@ public class ChangeEventService {
             // 빌드 시점에 정규화를 적용하기 위해 이 단계에서는 리스트를 재구성
         }
         events = normalizeEventTitles(events);
+        // 7. LLM 기반 이벤트 강화 (제목/설명/심각도 개선)
+        events = llmChangeEventEnhancerService.enhance(events, idAnalysisRequest, idProject);
         if (!events.isEmpty()) {
             changeEventRepository.saveAll(events);
             log.info("변경 이벤트 {}건 생성 완료 (분석 요청: {})", events.size(), idAnalysisRequest);
@@ -505,32 +510,27 @@ public class ChangeEventService {
         return repoName + " 코드 변경 (" + commits.size() + "건 커밋)";
     }
     /**
-     * 레포지토리의 전체 커밋을 통합하여 중복 제거된 구조화 description을 생성합니다.
+     * 레포지토리의 전체 커밋을 통합하여 기능 변경 중심의 description을 생성합니다.
      *
-     * <p>포함 정보: 작성자, 기간, 커밋 이력, 영향 레이어, 키워드,
-     * 변경 타입별 파일 목록(중복 제거)</p>
+     * <p>파일 목록 나열 대신, 어떤 기능이 어떻게 변경되었는지를 중심으로 서술합니다.
+     * 포함 정보: 작성자, 기간, 영향 레이어, 기능별 변경 내용</p>
      */
     private String buildRepoDescription(String repoName, List<GitDiffResult.CommitInfo> commits) {
         Set<String> authors = new LinkedHashSet<>();
-        Map<String, Set<String>> filesByChangeType = new LinkedHashMap<>();
         Set<String> allFilePaths = new LinkedHashSet<>();
         String earliestDate = null;
         String latestDate = null;
         for (GitDiffResult.CommitInfo commit : commits) {
             authors.add(commit.getAuthorName());
-            // 날짜 범위
             String dt = commit.getDateTime();
             if (dt != null) {
                 if (earliestDate == null || dt.compareTo(earliestDate) < 0) earliestDate = dt;
                 if (latestDate == null || dt.compareTo(latestDate) > 0) latestDate = dt;
             }
-            // 파일 수집 (중복 제거)
             for (GitDiffResult.FileChange fc : commit.getFileChanges()) {
-                String ct = fc.getChangeType() != null ? fc.getChangeType() : "MODIFY";
-                String filePath = fc.getFilePath();
-                if (filePath == null || isGeneratedFile(filePath)) continue;
-                allFilePaths.add(filePath);
-                filesByChangeType.computeIfAbsent(ct, k -> new LinkedHashSet<>()).add(extractFileName(filePath));
+                if (fc.getFilePath() != null && !isGeneratedFile(fc.getFilePath())) {
+                    allFilePaths.add(fc.getFilePath());
+                }
             }
         }
         // 레이어/키워드 분석
@@ -543,14 +543,27 @@ public class ChangeEventService {
         }
         List<String> topKeywords = keywordFreq.entrySet().stream()
                 .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
-                .limit(10)
+                .limit(5)
                 .map(Map.Entry::getKey)
                 .toList();
-        // description 조립
+        // 기능별 변경 상세 수집 (changeSummary 기반)
+        Map<String, List<String>> changesByFeature = new LinkedHashMap<>();
+        Set<String> processedFiles = new HashSet<>();
+        for (GitDiffResult.CommitInfo commit : commits) {
+            for (GitDiffResult.FileChange fc : commit.getFileChanges()) {
+                if (fc.getFilePath() == null || isGeneratedFile(fc.getFilePath())
+                        || !processedFiles.add(fc.getFilePath())) continue;
+                String featureArea = detectFeatureArea(fc.getFilePath());
+                String changeSummary = fc.getChangeSummary();
+                if (changeSummary != null && !changeSummary.isEmpty()) {
+                    changesByFeature.computeIfAbsent(featureArea, k -> new ArrayList<>()).add(changeSummary);
+                }
+            }
+        }
+        // description 조립 (기능 변경 중심)
         StringBuilder sb = new StringBuilder();
         sb.append("[").append(repoName).append("] ");
-        sb.append("커밋 ").append(commits.size()).append("건");
-        sb.append(", 변경 파일 ").append(allFilePaths.size()).append("개 (중복 제거)");
+        sb.append("커밋 ").append(commits.size()).append("건, 변경 파일 ").append(allFilePaths.size()).append("개");
         sb.append("\n작성자: ").append(String.join(", ", authors));
         if (earliestDate != null && latestDate != null) {
             sb.append(" | 기간: ").append(earliestDate).append(" ~ ").append(latestDate);
@@ -559,45 +572,47 @@ public class ChangeEventService {
             sb.append("\n영향 레이어: ").append(String.join(", ", layers));
         }
         if (!topKeywords.isEmpty()) {
-            sb.append("\n관련 키워드: ").append(String.join(", ", topKeywords));
+            sb.append("\n관련 기능: ").append(String.join(", ", topKeywords));
         }
-        // 변경 타입별 파일 목록 (중복 제거됨)
-        sb.append("\n\n변경 파일 목록:");
-        for (Map.Entry<String, Set<String>> entry : filesByChangeType.entrySet()) {
-            Set<String> files = entry.getValue();
-            sb.append("\n[").append(entry.getKey()).append("] ");
-            List<String> fileList = new ArrayList<>(files);
-            if (fileList.size() <= 15) {
-                sb.append(String.join(", ", fileList));
-            } else {
-                sb.append(String.join(", ", fileList.subList(0, 15)));
-                sb.append(" 외 ").append(fileList.size() - 15).append("개");
-            }
-        }
-        // 서비스 단위 변경 상세 (changeSummary가 있는 파일만)
-        List<String> changeSummaries = new ArrayList<>();
-        Set<String> processedFiles = new HashSet<>();
-        for (GitDiffResult.CommitInfo commit : commits) {
-            for (GitDiffResult.FileChange fc : commit.getFileChanges()) {
-                if (fc.getChangeSummary() != null && !fc.getChangeSummary().isEmpty()
-                        && fc.getFilePath() != null && !isGeneratedFile(fc.getFilePath())
-                        && processedFiles.add(fc.getFilePath())) {
-                    String fileName = extractFileName(fc.getFilePath());
-                    String summary = fileName + ": " + fc.getChangeSummary();
-                    if (fc.getAddedLines() > 0 || fc.getDeletedLines() > 0) {
-                        summary += " (+" + fc.getAddedLines() + "/-" + fc.getDeletedLines() + ")";
-                    }
-                    changeSummaries.add(summary);
+        // 기능 영역별 변경 내용 (파일명 대신 기능 단위로 서술)
+        if (!changesByFeature.isEmpty()) {
+            sb.append("\n\n기능별 변경 내용:");
+            for (Map.Entry<String, List<String>> entry : changesByFeature.entrySet()) {
+                sb.append("\n[").append(entry.getKey()).append("]");
+                for (String summary : entry.getValue()) {
+                    sb.append("\n  - ").append(summary);
                 }
             }
         }
-        if (!changeSummaries.isEmpty()) {
-            sb.append("\n\n변경 상세:");
-            for (String summary : changeSummaries) {
-                sb.append("\n- ").append(summary);
-            }
-        }
         return sb.toString();
+    }
+    /**
+     * 파일 경로에서 기능 영역을 추출합니다.
+     *
+     * <p>패키지 구조를 기반으로 controller/service/domain 등의 레이어와
+     * 기능 키워드를 결합하여 기능 영역명을 반환합니다.</p>
+     */
+    private String detectFeatureArea(String filePath) {
+        String normalized = filePath.replace('\\', '/');
+        // 레이어 판별
+        String layer = "";
+        if (normalized.contains("/controller/")) layer = "API";
+        else if (normalized.contains("/service/")) layer = "비즈니스 로직";
+        else if (normalized.contains("/domain/") || normalized.contains("/entity/")) layer = "데이터 모델";
+        else if (normalized.contains("/dto/")) layer = "데이터 전송";
+        else if (normalized.contains("/config/")) layer = "설정";
+        else if (normalized.contains("/util/") || normalized.contains("/common/")) layer = "공통 모듈";
+        else if (normalized.contains("/repository/")) layer = "데이터 접근";
+        else if (normalized.endsWith(".sql")) layer = "DB 스키마";
+        else if (normalized.endsWith(".yml") || normalized.endsWith(".yaml") || normalized.endsWith(".properties")) layer = "설정";
+        // 키워드 추출
+        List<String> keywords = LayerDetector.extractKeywords(filePath);
+        if (!keywords.isEmpty() && !layer.isEmpty()) {
+            return layer + " (" + keywords.get(0) + ")";
+        }
+        if (!layer.isEmpty()) return layer;
+        if (!keywords.isEmpty()) return keywords.get(0);
+        return "기타";
     }
     /**
      * QueryDSL Q클래스 등 자동 생성 파일을 판별합니다.
