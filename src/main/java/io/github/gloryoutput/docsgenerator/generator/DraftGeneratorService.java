@@ -106,38 +106,37 @@ public class DraftGeneratorService {
                         .add(trimmed);
             }
         }
-        // 항목이 1개뿐인 소규모 카테고리는 "기타 개선"으로 통합
-        Map<String, List<String>> consolidated = new LinkedHashMap<>();
-        List<String> etcItems = new ArrayList<>();
-        for (Map.Entry<String, List<String>> entry : itemsByKeyword.entrySet()) {
-            if (entry.getValue().isEmpty()) continue;
-            if (entry.getValue().size() <= 1 && itemsByKeyword.size() > 3) {
-                etcItems.addAll(entry.getValue());
-            } else {
-                consolidated.put(entry.getKey(), entry.getValue());
-            }
-        }
-        if (!etcItems.isEmpty()) {
-            consolidated.put("기타 개선", etcItems);
-        }
         // 키워드별 collapse 블록 생성
-        for (Map.Entry<String, List<String>> entry : consolidated.entrySet()) {
-            appendCollapseBlock(draft, entry.getKey(), entry.getValue());
+        for (Map.Entry<String, List<String>> entry : itemsByKeyword.entrySet()) {
+            if (!entry.getValue().isEmpty()) {
+                appendCollapseBlock(draft, entry.getKey(), entry.getValue());
+            }
         }
     }
 
     /**
-     * 카테고리명에서 기능 키워드를 추출합니다.
+     * 카테고리명에서 기능 키워드를 추출하고 표시 형식으로 변환합니다.
      *
-     * <p>"비즈니스 로직 (session)" → "session", "설정" → "설정"</p>
+     * <p>"비즈니스 로직 (session)" → "session", "설정" → "설정"
+     * 계층적 키워드의 경우 "비즈니스 로직 (scout/weather)" → "scout > weather"로 변환하여
+     * 하위 기능이 상위 기능에 종속됨을 표현합니다.</p>
      *
      * @param category 카테고리명
-     * @return 추출된 기능 키워드
+     * @return 추출된 기능 키워드 (계층 구조 포함)
      */
     private String extractKeyword(String category) {
         Matcher matcher = KEYWORD_EXTRACT_PATTERN.matcher(category);
         if (matcher.matches()) {
-            return matcher.group(1);
+            String keyword = matcher.group(1);
+            // 계층적 키워드 변환: "scout/weather" → "scout > weather"
+            if (keyword.contains("/")) {
+                return keyword.replace("/", " > ");
+            }
+            return keyword;
+        }
+        // 괄호 없는 카테고리도 계층적 키워드일 수 있음 (LLM 미사용 시)
+        if (category.contains("/")) {
+            return category.replace("/", " > ");
         }
         return category;
     }

@@ -602,10 +602,13 @@ public class ChangeEventService {
         }
         // LLM으로 카테고리별 변경 내용 압축 (LLM 없으면 원본 카테고리 구조 유지)
         Map<String, List<String>> compressedByCategory = llmDescriptionCompressorService.compress(changesByFeature);
-        // description 조립 (기능 변경 중심, 간결하게)
+        // description 조립 (기능 변경 중심)
         StringBuilder sb = new StringBuilder();
         sb.append("[").append(repoName).append("] ");
-        sb.append("커밋 ").append(commits.size()).append("건");
+        sb.append("커밋 ").append(commits.size()).append("건, 변경 파일 ").append(allFilePaths.size()).append("개");
+        if (!topKeywords.isEmpty()) {
+            sb.append("\n관련 기능: ").append(String.join(", ", topKeywords));
+        }
         if (!compressedByCategory.isEmpty()) {
             sb.append("\n\n기능별 변경 내용:");
             for (Map.Entry<String, List<String>> entry : compressedByCategory.entrySet()) {
@@ -816,7 +819,9 @@ public class ChangeEventService {
      * 파일 경로에서 기능 영역을 추출합니다.
      *
      * <p>패키지 구조를 기반으로 controller/service/domain 등의 레이어와
-     * 기능 키워드를 결합하여 기능 영역명을 반환합니다.</p>
+     * 기능 키워드를 결합하여 기능 영역명을 반환합니다.
+     * 디렉토리 구조에서 부모 기능이 감지되면 계층적 키워드(parent/child)로 표현합니다.
+     * 예: /service/scout/weather/WeatherService.java → "비즈니스 로직 (scout/weather)"</p>
      */
     private String detectFeatureArea(String filePath) {
         String normalized = filePath.replace('\\', '/');
@@ -831,14 +836,53 @@ public class ChangeEventService {
         else if (normalized.contains("/repository/")) layer = "데이터 접근";
         else if (normalized.endsWith(".sql")) layer = "DB 스키마";
         else if (normalized.endsWith(".yml") || normalized.endsWith(".yaml") || normalized.endsWith(".properties")) layer = "설정";
-        // 키워드 추출
+        // 키워드 추출 (파일명 기반)
         List<String> keywords = LayerDetector.extractKeywords(filePath);
+        // 디렉토리 구조에서 부모 기능 감지
+        String parentFeature = extractParentFeature(normalized);
+        if (!keywords.isEmpty() && parentFeature != null
+                && !parentFeature.equalsIgnoreCase(keywords.get(0))) {
+            // 부모 기능과 파일 키워드가 다르면 계층적 키워드 생성 (parent/child)
+            String hierarchicalKeyword = parentFeature + "/" + keywords.get(0);
+            if (!layer.isEmpty()) {
+                return layer + " (" + hierarchicalKeyword + ")";
+            }
+            return hierarchicalKeyword;
+        }
         if (!keywords.isEmpty() && !layer.isEmpty()) {
             return layer + " (" + keywords.get(0) + ")";
         }
         if (!layer.isEmpty()) return layer;
         if (!keywords.isEmpty()) return keywords.get(0);
         return "기타";
+    }
+    /**
+     * 디렉토리 구조에서 부모 기능 키워드를 추출합니다.
+     *
+     * <p>레이어 디렉토리(controller, service, domain 등) 이후의 첫 번째 하위 디렉토리를
+     * 부모 기능으로 판별합니다. 하위 디렉토리가 존재해야(2단계 이상 중첩) 부모-자식 관계입니다.</p>
+     *
+     * <p>예: /service/scout/weather/WeatherService.java → "scout" (부모)
+     * /service/WeatherService.java → null (단일 레벨, 부모 없음)</p>
+     *
+     * @param normalizedPath 정규화된 파일 경로 (/ 구분자)
+     * @return 부모 기능 키워드 또는 null
+     */
+    private String extractParentFeature(String normalizedPath) {
+        String[] layerMarkers = {"/controller/", "/service/", "/domain/", "/entity/",
+                "/dto/", "/repository/", "/config/"};
+        for (String marker : layerMarkers) {
+            int idx = normalizedPath.indexOf(marker);
+            if (idx >= 0) {
+                String afterLayer = normalizedPath.substring(idx + marker.length());
+                String[] parts = afterLayer.split("/");
+                // 2단계 이상 중첩이어야 부모-자식 관계 (디렉토리 + 파일 = 최소 2 parts)
+                if (parts.length > 1) {
+                    return parts[0].toLowerCase();
+                }
+            }
+        }
+        return null;
     }
     /**
      * QueryDSL Q클래스 등 자동 생성 파일을 판별합니다.

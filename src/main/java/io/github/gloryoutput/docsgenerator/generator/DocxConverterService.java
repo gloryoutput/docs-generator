@@ -112,7 +112,7 @@ public class DocxConverterService {
                 parsed.metaItems.put(cells[0].trim(), cells[1].trim());
             }
         }
-        // 섹션 파싱 (### 제목 또는 <details><summary>제목</summary> → 내용)
+        // 섹션 파싱 (### 제목 → 내용, <details> 블록은 해당 섹션의 콘텐츠로 포함)
         String currentSection = null;
         StringBuilder currentContent = new StringBuilder();
         boolean inDetails = false;
@@ -126,30 +126,36 @@ public class DocxConverterService {
                 currentSection = trimmed.substring(4).trim();
                 currentContent = new StringBuilder();
                 inDetails = false;
-            } else if (trimmed.equals("<details>")) {
-                // <details> 블록 시작 - 이전 섹션 저장
-                if (currentSection != null) {
-                    parsed.sections.put(currentSection, currentContent.toString().trim());
-                    currentSection = null;
-                    currentContent = new StringBuilder();
+            } else if (currentSection != null) {
+                // <details>/<summary>/</details> 태그는 제거하고 내용만 포함
+                if (trimmed.equals("<details>") || trimmed.equals("</details>")) {
+                    continue;
                 }
+                Matcher summaryMatcher = DETAILS_SUMMARY_PATTERN.matcher(trimmed);
+                if (summaryMatcher.matches()) {
+                    // summary 제목을 볼드 서브헤더로 변환
+                    currentContent.append("**").append(summaryMatcher.group(1)).append("**\n");
+                } else {
+                    currentContent.append(line).append("\n");
+                }
+            } else if (trimmed.equals("<details>")) {
+                // ### 섹션 밖의 독립 <details> 블록
                 inDetails = true;
-            } else if (inDetails && currentSection == null) {
+            } else if (inDetails) {
                 Matcher summaryMatcher = DETAILS_SUMMARY_PATTERN.matcher(trimmed);
                 if (summaryMatcher.matches()) {
                     currentSection = summaryMatcher.group(1).trim();
                     currentContent = new StringBuilder();
+                } else if (trimmed.equals("</details>")) {
+                    if (currentSection != null) {
+                        parsed.sections.put(currentSection, currentContent.toString().trim());
+                        currentSection = null;
+                        currentContent = new StringBuilder();
+                    }
+                    inDetails = false;
+                } else if (currentSection != null) {
+                    currentContent.append(line).append("\n");
                 }
-            } else if (trimmed.equals("</details>")) {
-                // <details> 블록 종료 - 섹션 저장
-                if (currentSection != null) {
-                    parsed.sections.put(currentSection, currentContent.toString().trim());
-                    currentSection = null;
-                    currentContent = new StringBuilder();
-                }
-                inDetails = false;
-            } else if (currentSection != null) {
-                currentContent.append(line).append("\n");
             }
         }
         // 마지막 섹션 저장
