@@ -9,6 +9,7 @@ import io.github.gloryoutput.docsgenerator.service.RuleEngineService.AnalysisCon
 import io.github.gloryoutput.docsgenerator.service.RuleEngineService.ChangeEventTemplate;
 import io.github.gloryoutput.docsgenerator.service.RuleEngineService.MatchedRule;
 import io.github.gloryoutput.docsgenerator.summarizer.LlmChangeEventEnhancerService;
+import io.github.gloryoutput.docsgenerator.summarizer.LlmDescriptionCompressorService;
 import io.github.gloryoutput.docsgenerator.util.LayerDetector;
 import io.github.gloryoutput.docsgenerator.util.ReportNoiseFilter;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +35,7 @@ public class ChangeEventService {
     private final ChangeEventRepository changeEventRepository;
     private final RuleEngineService ruleEngineService;
     private final LlmChangeEventEnhancerService llmChangeEventEnhancerService;
+    private final LlmDescriptionCompressorService llmDescriptionCompressorService;
 
     /**
      * 분석 결과로부터 변경 이벤트를 생성하고 저장합니다.
@@ -598,6 +600,8 @@ public class ChangeEventService {
                 }
             }
         }
+        // LLM으로 카테고리별 변경 내용 압축 (LLM 없으면 원본 카테고리 구조 유지)
+        Map<String, List<String>> compressedByCategory = llmDescriptionCompressorService.compress(changesByFeature);
         // description 조립 (기능 변경 중심)
         StringBuilder sb = new StringBuilder();
         sb.append("[").append(repoName).append("] ");
@@ -612,10 +616,9 @@ public class ChangeEventService {
         if (!topKeywords.isEmpty()) {
             sb.append("\n관련 기능: ").append(String.join(", ", topKeywords));
         }
-        // 기능 영역별 변경 내용 (비개발자가 이해할 수 있는 기능 단위)
-        if (!changesByFeature.isEmpty()) {
+        if (!compressedByCategory.isEmpty()) {
             sb.append("\n\n기능별 변경 내용:");
-            for (Map.Entry<String, Set<String>> entry : changesByFeature.entrySet()) {
+            for (Map.Entry<String, List<String>> entry : compressedByCategory.entrySet()) {
                 if (entry.getValue().isEmpty()) continue;
                 sb.append("\n[").append(entry.getKey()).append("]");
                 for (String summary : entry.getValue()) {

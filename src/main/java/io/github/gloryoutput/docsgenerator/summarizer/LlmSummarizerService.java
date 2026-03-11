@@ -92,24 +92,31 @@ public class LlmSummarizerService {
     }
 
     /**
-     * 변경 이벤트 그룹과 보고서 초안을 기반으로 문장을 다듬어 반환합니다.
+     * 변경 이벤트 그룹과 보고서 초안을 기반으로 6개 섹션 보고서를 생성합니다.
      *
-     * <p>LlmClient 빈이 없으면 원본 초안을 그대로 반환합니다.
-     * LLM 호출 중 오류 발생 시에도 원본 초안을 반환합니다(fallback).</p>
+     * <p>LlmClient 빈이 없거나 LLM 호출 실패 시 빈 문자열을 반환합니다.</p>
      *
-     * @param groups        상관관계로 그룹핑된 변경 이벤트 목록
-     * @param originalDraft 보고서 초안 (Markdown)
-     * @return 다듬어진 보고서 텍스트 또는 원본 초안
+     * @param groups             상관관계로 그룹핑된 변경 이벤트 목록
+     * @param originalDraft      보고서 초안 (Markdown)
+     * @param mergeRepositories  레포지토리 통합 여부
+     * @return 6개 섹션이 포함된 보고서 텍스트 또는 빈 문자열
+     */
+    /**
+     * 변경 이벤트 그룹과 보고서 초안을 기반으로 6개 섹션 보고서를 생성합니다.
+     *
+     * <p>LlmClient 빈이 없거나 LLM 호출 실패 시 빈 문자열을 반환합니다.
+     * 6개 섹션(목적, 발생한 문제, 문제 원인, 문제 해결 과정, 결과, 개선 및 예방 방안)은
+     * LLM 없이는 생성할 수 없으므로, 원본 초안을 반환하지 않습니다.</p>
      */
     public String summarize(List<CorrelatedGroup> groups, String originalDraft, boolean mergeRepositories) {
+        if (llmClient == null) {
+            log.debug("LLM 비활성화 - 6개 섹션 생성 불가, 빈 문자열 반환");
+            return "";
+        }
         try {
             String userPrompt = buildUserPrompt(groups, originalDraft, mergeRepositories);
             String timestamp = LocalDateTime.now().format(FILE_FORMATTER);
             saveInputFile(timestamp, SYSTEM_PROMPT, userPrompt);
-            if (llmClient == null) {
-                log.debug("LLM 비활성화 - 원본 초안 반환");
-                return originalDraft;
-            }
             log.info("LLM 입력 - System Prompt:\n{}", SYSTEM_PROMPT);
             log.info("LLM 입력 - User Prompt:\n{}", userPrompt);
             String result = llmClient.chat(SYSTEM_PROMPT, userPrompt);
@@ -117,8 +124,8 @@ public class LlmSummarizerService {
             saveOutputFile(timestamp, result);
             return result;
         } catch (Exception e) {
-            log.warn("LLM 호출 실패 - 원본 초안 반환. 원인: {}", e.getMessage());
-            return originalDraft;
+            log.warn("LLM 호출 실패 - 6개 섹션 생성 불가. 원인: {}", e.getMessage());
+            return "";
         }
     }
 
@@ -249,19 +256,26 @@ public class LlmSummarizerService {
         return sb.toString();
     }
 
+    /** 사용자 프롬프트의 각 대용량 섹션에 적용할 최대 문자 수 (LLM 토큰 초과 방지) */
+    private static final int MAX_SECTION_CHARS = 8000;
+
     /**
      * 시스템 프롬프트에 전달할 사용자 프롬프트를 구성합니다.
+     *
+     * <p>변경 이벤트 상세와 보고서 초안은 대량의 커밋이 포함될 경우
+     * LLM 컨텍스트 윈도우를 초과할 수 있으므로, 섹션별 최대 문자 수를 제한합니다.</p>
      */
     private String buildUserPrompt(List<CorrelatedGroup> groups, String originalDraft,
                                     boolean mergeRepositories) {
         String summary = buildSummarySection(groups);
-        String eventsMarkdown = buildEventsMarkdown(groups);
+        String eventsMarkdown = truncateIfNeeded(buildEventsMarkdown(groups), MAX_SECTION_CHARS);
         String impactSummary = buildImpactSummary(groups);
+        String truncatedDraft = truncateIfNeeded(originalDraft, MAX_SECTION_CHARS);
         StringBuilder sb = new StringBuilder();
         sb.append("## 변경 요약 통계\n\n").append(summary);
         sb.append("\n## 영향 범위 정보\n\n").append(impactSummary);
         sb.append("\n## 변경 이벤트 상세 (참고 자료)\n\n").append(eventsMarkdown);
-        sb.append("\n## 보고서 초안 (다듬을 대상)\n\n").append(originalDraft);
+        sb.append("\n## 보고서 초안 (다듬을 대상)\n\n").append(truncatedDraft);
         sb.append("\n---\n\n");
         if (mergeRepositories) {
             sb.append("## 중요: 통합 프로젝트 관점 서술\n");
@@ -279,5 +293,25 @@ public class LlmSummarizerService {
         sb.append("영향 범위 정보와 고위험 변경 사항은 '결과' 및 '개선 및 예방 방안' 섹션에 자연스럽게 반영하세요.\n");
         sb.append("결과물은 Markdown 본문만 출력하세요. 부가 설명이나 인사말은 포함하지 마세요.");
         return sb.toString();
+    }
+
+    /**
+     * 텍스트가 최대 문자 수를 초과하면 줄 단위로 잘라내고 생략 표시를 추가합니다.
+     *
+     * @param text 원본 텍스트
+     * @param maxChars 최대 문자 수
+     * @return 원본 텍스트 또는 잘라낸 텍스트
+     */
+    private String truncateIfNeeded(String text, int maxChars) {
+        if (text == null || text.length() <= maxChars) {
+            return text;
+        }
+        // 줄 단위로 자르기 (문장 중간 절단 방지)
+        int cutIndex = text.lastIndexOf('\n', maxChars);
+        if (cutIndex <= 0) {
+            cutIndex = maxChars;
+        }
+        log.info("프롬프트 섹션 잘라냄: {}자 → {}자", text.length(), cutIndex);
+        return text.substring(0, cutIndex) + "\n\n(... 이하 생략 - 위 내용을 기반으로 보고서를 작성해 주세요)";
     }
 }

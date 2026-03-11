@@ -141,11 +141,11 @@ public class AnalysisService {
         // 상관관계 분석 (Step 9)
         List<CorrelatedGroup> groups = correlationService.correlateEvents(changeEvents);
         // 초안 생성 (Step 10)
-        String draft = draftGeneratorService.generateDraft(groups);
-        // LLM 요약 - 초안 문장 다듬기 (Step 10.5)
-        String polishedDraft = llmSummarizerService.summarize(groups, draft, mergeRepos);
-        // 최종 보고서 생성 및 저장 (Step 11)
-        reportGeneratorService.generateAndSave(analysisRequest, project.getProjectName(), groups, polishedDraft);
+        String rawDraft = draftGeneratorService.generateDraft(groups);
+        // LLM 요약 - 6개 섹션(목적, 발생한 문제, 문제 원인, 문제 해결 과정, 결과, 개선 및 예방 방안) 생성 (Step 10.5)
+        String polishedDraft = llmSummarizerService.summarize(groups, rawDraft, mergeRepos);
+        // 최종 보고서 생성 및 저장: 6개 섹션 + 프로젝트 코드 변경 상세 (Step 11)
+        reportGeneratorService.generateAndSave(analysisRequest, project.getProjectName(), groups, polishedDraft, rawDraft);
         analysisRequest.complete();
         analysisRequestRepository.save(analysisRequest);
         return AnalysisResponse.from(analysisRequest, filteredGitResults, filteredSchemaResults, filteredApiResult);

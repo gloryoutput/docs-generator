@@ -229,7 +229,7 @@ public class DocxConverterService {
         boolean hasExpectedSections = SECTION_HEADERS.stream()
                 .anyMatch(h -> parsed.sections.containsKey(h));
         if (hasExpectedSections) {
-            // LLM이 정상적으로 6개 섹션을 생성한 경우
+            // 6개 섹션 렌더링
             for (String sectionName : SECTION_HEADERS) {
                 String content = parsed.sections.getOrDefault(sectionName, "");
                 if (PROBLEM_GROUP.contains(sectionName)) {
@@ -243,8 +243,14 @@ public class DocxConverterService {
                     addSimpleRow(ctTbl, sectionName, content);
                 }
             }
+            // 6개 섹션 외 나머지 섹션 (변경 상세의 rawDraft 그룹 등)
+            Set<String> expectedSet = new HashSet<>(SECTION_HEADERS);
+            for (Map.Entry<String, String> section : parsed.sections.entrySet()) {
+                if (!expectedSet.contains(section.getKey())) {
+                    addSimpleRow(ctTbl, section.getKey(), section.getValue());
+                }
+            }
         } else {
-            // LLM 비활성화 등으로 섹션 구조가 없는 경우: 모든 파싱된 섹션을 그대로 표시
             for (Map.Entry<String, String> section : parsed.sections.entrySet()) {
                 addSimpleRow(ctTbl, section.getKey(), section.getValue());
             }
