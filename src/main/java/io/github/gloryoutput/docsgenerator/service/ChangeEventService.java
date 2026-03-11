@@ -840,14 +840,22 @@ public class ChangeEventService {
         List<String> keywords = LayerDetector.extractKeywords(filePath);
         // 디렉토리 구조에서 부모 기능 감지
         String parentFeature = extractParentFeature(normalized);
-        if (!keywords.isEmpty() && parentFeature != null
-                && !parentFeature.equalsIgnoreCase(keywords.get(0))) {
-            // 부모 기능과 파일 키워드가 다르면 계층적 키워드 생성 (parent/child)
-            String hierarchicalKeyword = parentFeature + "/" + keywords.get(0);
-            if (!layer.isEmpty()) {
-                return layer + " (" + hierarchicalKeyword + ")";
+        if (!keywords.isEmpty() && parentFeature != null) {
+            // 부모 키워드와 다른 첫 번째 키워드를 자식으로 사용
+            String childKeyword = null;
+            for (String kw : keywords) {
+                if (!kw.equalsIgnoreCase(parentFeature)) {
+                    childKeyword = kw;
+                    break;
+                }
             }
-            return hierarchicalKeyword;
+            if (childKeyword != null) {
+                String hierarchicalKeyword = parentFeature + "/" + childKeyword;
+                if (!layer.isEmpty()) {
+                    return layer + " (" + hierarchicalKeyword + ")";
+                }
+                return hierarchicalKeyword;
+            }
         }
         if (!keywords.isEmpty() && !layer.isEmpty()) {
             return layer + " (" + keywords.get(0) + ")";
@@ -856,14 +864,32 @@ public class ChangeEventService {
         if (!keywords.isEmpty()) return keywords.get(0);
         return "기타";
     }
+    /** 부모 기능으로 인식하지 않을 구조적/레이어 디렉토리명 */
+    private static final Set<String> NON_FEATURE_DIRS = Set.of(
+            "impl", "common", "base", "util", "utils", "helper", "helpers",
+            "exception", "exceptions", "error", "errors",
+            "mapper", "mappers", "converter", "converters",
+            "handler", "handlers", "listener", "listeners",
+            "interceptor", "interceptors", "filter", "filters",
+            "aspect", "aspects", "annotation", "annotations",
+            "enums", "enum", "constant", "constants",
+            "model", "entity", "domain", "dto", "vo",
+            "request", "response", "spec", "specification",
+            "querydsl", "repository", "service", "controller",
+            "api", "web", "rest", "support",
+            "core", "internal", "config", "configuration",
+            "custom", "abstract", "type", "types"
+    );
     /**
      * 디렉토리 구조에서 부모 기능 키워드를 추출합니다.
      *
-     * <p>레이어 디렉토리(controller, service, domain 등) 이후의 첫 번째 하위 디렉토리를
-     * 부모 기능으로 판별합니다. 하위 디렉토리가 존재해야(2단계 이상 중첩) 부모-자식 관계입니다.</p>
+     * <p>레이어 디렉토리 이후 3단계 이상 중첩(부모/자식/파일)일 때만
+     * 첫 번째 하위 디렉토리를 부모로 판별합니다.
+     * 구조적 디렉토리(impl, request, common 등)는 부모로 인식하지 않습니다.</p>
      *
      * <p>예: /service/scout/weather/WeatherService.java → "scout" (부모)
-     * /service/WeatherService.java → null (단일 레벨, 부모 없음)</p>
+     * /service/scout/ScoutService.java → null (자식 디렉토리 없음)
+     * /dto/request/ScoutRequest.java → null (request는 구조적 디렉토리)</p>
      *
      * @param normalizedPath 정규화된 파일 경로 (/ 구분자)
      * @return 부모 기능 키워드 또는 null
@@ -876,9 +902,12 @@ public class ChangeEventService {
             if (idx >= 0) {
                 String afterLayer = normalizedPath.substring(idx + marker.length());
                 String[] parts = afterLayer.split("/");
-                // 2단계 이상 중첩이어야 부모-자식 관계 (디렉토리 + 파일 = 최소 2 parts)
-                if (parts.length > 1) {
-                    return parts[0].toLowerCase();
+                // 3단계 이상 중첩 필수: 부모디렉토리/자식디렉토리/파일.java
+                if (parts.length > 2) {
+                    String candidate = parts[0].toLowerCase();
+                    if (!NON_FEATURE_DIRS.contains(candidate)) {
+                        return candidate;
+                    }
                 }
             }
         }
