@@ -12,9 +12,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
  * 최종 Markdown 보고서를 생성하고 저장하는 서비스
@@ -145,220 +142,109 @@ public class ReportGeneratorService {
                                           Map<String, Integer> categoryCount,
                                           Map<String, Integer> severityCount) {
         log.info("LLM 미사용 - fallback 6개 섹션 생성 (프로젝트: {})", projectName);
-        // 이벤트를 카테고리별로 분류
-        Map<String, List<ChangeEvent>> eventsByCategory = new LinkedHashMap<>();
+        // 전체 이벤트를 단일 리스트로 수집
+        List<ChangeEvent> allEvents = new ArrayList<>();
         List<ChangeEvent> highEvents = new ArrayList<>();
         for (CorrelatedGroup group : groups) {
             if (group.getEvents() == null) continue;
             for (ChangeEvent event : group.getEvents()) {
-                eventsByCategory.computeIfAbsent(event.getCategory(), k -> new ArrayList<>()).add(event);
-                if ("HIGH".equals(event.getSeverity())) {
-                    highEvents.add(event);
-                }
+                allEvents.add(event);
+                if ("HIGH".equals(event.getSeverity())) highEvents.add(event);
             }
         }
-        // 주요 기능 키워드 추출 (목적 섹션에서 사용)
-        List<String> mainFeatures = extractMainFeatures(groups);
         StringBuilder sb = new StringBuilder();
         // ### 목적
         sb.append("### 목적\n\n");
-        sb.append("본 보고서는 ").append(projectName).append(" 프로젝트의 ")
-                .append(startDate).append(" ~ ").append(endDate).append(" 기간 동안 수행된 ");
-        if (!mainFeatures.isEmpty()) {
-            sb.append(String.join(", ", mainFeatures)).append(" 관련 ");
-        }
-        sb.append("변경 작업의 배경, 수행 과정 및 결과를 정리한 문서입니다.");
-        // 카테고리별 요약을 목적에 포함
-        List<String> scopeParts = new ArrayList<>();
-        if (eventsByCategory.containsKey("SCHEMA_CHANGE")) {
-            scopeParts.add("DB 스키마 변경 " + eventsByCategory.get("SCHEMA_CHANGE").size() + "건");
-        }
-        if (eventsByCategory.containsKey("API_CHANGE")) {
-            scopeParts.add("API 변경 " + eventsByCategory.get("API_CHANGE").size() + "건");
-        }
-        if (eventsByCategory.containsKey("CODE_CHANGE")) {
-            scopeParts.add("코드 변경 " + eventsByCategory.get("CODE_CHANGE").size() + "건");
-        }
-        if (!scopeParts.isEmpty()) {
-            sb.append(" 이번 작업의 범위는 ").append(String.join(", ", scopeParts)).append("을 포함합니다.");
-        }
-        sb.append("\n\n");
+        sb.append("본 보고서는 ").append(projectName).append(" 프로젝트에서 ")
+                .append(startDate).append(" ~ ").append(endDate)
+                .append(" 기간에 수행된 변경 작업(총 ").append(allEvents.size()).append("건)의 ")
+                .append("배경과 결과를 정리한 문서입니다.\n\n");
         // ### 발생한 문제
         sb.append("### 발생한 문제\n\n");
-        if (eventsByCategory.containsKey("SCHEMA_CHANGE")) {
-            sb.append("- **DB 스키마**: ");
-            appendEventDetails(sb, eventsByCategory.get("SCHEMA_CHANGE"));
-        }
-        if (eventsByCategory.containsKey("API_CHANGE")) {
-            sb.append("- **API**: ");
-            appendEventDetails(sb, eventsByCategory.get("API_CHANGE"));
-        }
-        if (eventsByCategory.containsKey("CODE_CHANGE")) {
-            sb.append("- **코드**: ");
-            appendEventDetails(sb, eventsByCategory.get("CODE_CHANGE"));
-        }
-        if (eventsByCategory.containsKey("DEPENDENCY_CHANGE")) {
-            sb.append("- **의존성**: ");
-            appendEventDetails(sb, eventsByCategory.get("DEPENDENCY_CHANGE"));
+        sb.append("아래 항목들에 대해 신규 개발 또는 기존 기능 개선이 필요하였습니다.\n\n");
+        for (ChangeEvent event : allEvents) {
+            sb.append("- ").append(event.getTitle()).append("\n");
         }
         sb.append("\n");
         // ### 문제 원인
         sb.append("### 문제 원인\n\n");
-        if (eventsByCategory.containsKey("SCHEMA_CHANGE")) {
-            List<ChangeEvent> schemaEvents = eventsByCategory.get("SCHEMA_CHANGE");
-            sb.append("- **DB 스키마**: ");
-            appendCauseFromEvents(sb, schemaEvents, "데이터 모델");
-        }
-        if (eventsByCategory.containsKey("API_CHANGE")) {
-            List<ChangeEvent> apiEvents = eventsByCategory.get("API_CHANGE");
-            sb.append("- **API**: ");
-            appendCauseFromEvents(sb, apiEvents, "API 인터페이스");
-        }
-        if (eventsByCategory.containsKey("CODE_CHANGE")) {
-            List<ChangeEvent> codeEvents = eventsByCategory.get("CODE_CHANGE");
-            sb.append("- **코드**: ");
-            appendCauseFromEvents(sb, codeEvents, "비즈니스 로직");
-        }
-        if (eventsByCategory.containsKey("DEPENDENCY_CHANGE")) {
-            List<ChangeEvent> depEvents = eventsByCategory.get("DEPENDENCY_CHANGE");
-            sb.append("- **의존성**: ");
-            appendCauseFromEvents(sb, depEvents, "외부 라이브러리");
+        sb.append("위 변경은 업무 요구사항에 따라 다음과 같은 원인으로 진행되었습니다.\n\n");
+        for (ChangeEvent event : allEvents) {
+            sb.append("- **").append(event.getTitle()).append("**: ");
+            String firstLine = extractFirstMeaningfulLine(event.getDescription());
+            if (firstLine != null) {
+                sb.append(firstLine);
+            } else {
+                sb.append("해당 기능의 신규 개발 또는 기존 구조 개선 요구");
+            }
+            sb.append("\n");
         }
         sb.append("\n");
-        // ### 문제 해결 과정 (그룹별 요약 - 기능별 상세는 rawDraft collapse로 자동 삽입)
+        // ### 문제 해결 과정
         sb.append("### 문제 해결 과정\n\n");
         int stepIndex = 1;
         for (CorrelatedGroup group : groups) {
             if (group.getEvents() == null || group.getEvents().isEmpty()) continue;
             sb.append(stepIndex++).append(". **").append(group.getTitle()).append("**\n");
             for (ChangeEvent event : group.getEvents()) {
-                if (event.getDescription() != null && !event.getDescription().isBlank()) {
-                    // description에서 의미 있는 첫 몇 줄을 추출
-                    List<String> meaningfulLines = extractMeaningfulLines(event.getDescription(), 3);
-                    for (String line : meaningfulLines) {
+                List<String> lines = extractMeaningfulLines(
+                        event.getDescription() != null ? event.getDescription() : "", 2);
+                if (!lines.isEmpty()) {
+                    for (String line : lines) {
                         sb.append("   - ").append(line).append("\n");
                     }
                 } else {
-                    // description이 없는 경우 title 기반으로 서술
-                    sb.append("   - ").append(event.getTitle()).append("이(가) 수행되었습니다.\n");
+                    sb.append("   - ").append(event.getTitle()).append("\n");
                 }
             }
         }
         sb.append("\n");
         // ### 결과
         sb.append("### 결과\n\n");
-        for (Map.Entry<String, List<ChangeEvent>> entry : eventsByCategory.entrySet()) {
-            String categoryName = formatCategoryName(entry.getKey());
-            List<ChangeEvent> events = entry.getValue();
-            if (events.size() == 1) {
-                sb.append("- ").append(events.get(0).getTitle()).append("을(를) 완료하였습니다.\n");
-            } else {
-                sb.append("- **").append(categoryName).append("**: ");
-                List<String> titles = events.stream()
-                        .map(ChangeEvent::getTitle)
-                        .toList();
-                if (titles.size() <= 3) {
-                    sb.append(String.join(", ", titles)).append("을(를) 완료하였습니다.\n");
-                } else {
-                    sb.append(titles.get(0)).append(", ").append(titles.get(1))
-                            .append(" 외 ").append(titles.size() - 2).append("건의 변경을 완료하였습니다.\n");
-                    for (String title : titles.subList(2, titles.size())) {
-                        sb.append("  - ").append(title).append("\n");
-                    }
-                }
-            }
+        for (ChangeEvent event : allEvents) {
+            sb.append("- ").append(event.getTitle()).append(" — 완료\n");
         }
         sb.append("\n");
         // ### 개선 및 예방 방안
         sb.append("### 개선 및 예방 방안\n\n");
-        if (!highEvents.isEmpty()) {
+        if (highEvents.isEmpty() && allEvents.stream().noneMatch(e ->
+                "SCHEMA_CHANGE".equals(e.getCategory()) || containsAny(e.getTitle(), "삭제", "제거"))) {
+            sb.append("- 별도의 후속 조치가 필요하지 않습니다.\n");
+        } else {
             for (ChangeEvent event : highEvents) {
-                sb.append("- **").append(event.getTitle()).append("**: ");
-                if (event.getDescription() != null && !event.getDescription().isBlank()) {
-                    String firstLine = event.getDescription().lines().findFirst().orElse("");
-                    if (!firstLine.isBlank()) {
-                        sb.append(firstLine).append(" 운영 환경 적용 후 정상 동작 여부를 확인해야 합니다.\n");
-                    } else {
-                        sb.append("해당 변경 항목에 대해 운영 환경 적용 후 모니터링이 필요합니다.\n");
-                    }
-                } else {
-                    sb.append("고위험 변경으로 분류되었으므로, 운영 환경 적용 후 모니터링이 필요합니다.\n");
+                sb.append("- ").append(event.getTitle()).append(" — 배포 후 정상 동작 확인 필요\n");
+            }
+            for (ChangeEvent event : allEvents) {
+                if ("HIGH".equals(event.getSeverity())) continue;
+                if ("SCHEMA_CHANGE".equals(event.getCategory())) {
+                    sb.append("- ").append(event.getTitle()).append(" — 기존 데이터 정합성 확인 필요\n");
+                } else if (containsAny(event.getTitle(), "삭제", "제거")) {
+                    sb.append("- ").append(event.getTitle()).append(" — 기존 연동 영향 확인 필요\n");
                 }
             }
-        }
-        if (highEvents.isEmpty()) {
-            sb.append("- 이번 변경은 모두 중·저위험으로 분류되어 별도의 후속 조치가 필요하지 않습니다.\n");
         }
         return sb.toString();
     }
-    /**
-     * 그룹 목록에서 주요 기능 키워드를 추출합니다.
-     *
-     * <p>그룹 제목 및 이벤트 제목에서 반복되는 핵심 기능명을 최대 3개까지 추출합니다.</p>
-     */
-    private List<String> extractMainFeatures(List<CorrelatedGroup> groups) {
-        List<String> features = new ArrayList<>();
-        for (CorrelatedGroup group : groups) {
-            if (group.getTitle() != null && !group.getTitle().isBlank()) {
-                // "프로젝트 코드 변경 (N건 커밋)" 같은 일반적 제목은 건너뜀
-                String title = group.getTitle();
-                if (!title.contains("코드 변경") && !title.contains("커밋") && title.length() <= 50) {
-                    features.add(title);
-                }
-            }
+    private boolean containsAny(String text, String... keywords) {
+        if (text == null) return false;
+        for (String kw : keywords) {
+            if (text.contains(kw)) return true;
         }
-        // 최대 3개까지만
-        if (features.size() > 3) {
-            features = new ArrayList<>(features.subList(0, 3));
-        }
-        return features;
+        return false;
     }
     /**
-     * 이벤트 목록을 제목 + description 기반으로 구체적으로 서술합니다.
+     * description의 첫 번째 의미 있는 줄을 반환합니다.
      */
-    private void appendEventDetails(StringBuilder sb, List<ChangeEvent> events) {
-        if (events.size() == 1) {
-            ChangeEvent event = events.get(0);
-            sb.append(event.getTitle());
-            if (event.getDescription() != null && !event.getDescription().isBlank()) {
-                String firstLine = event.getDescription().lines().findFirst().orElse("");
-                if (!firstLine.isBlank() && !firstLine.equals(event.getTitle())) {
-                    sb.append(" — ").append(firstLine);
-                }
-            }
-            sb.append("\n");
-        } else {
-            sb.append(events.size()).append("건의 변경이 필요하였습니다.\n");
-            for (ChangeEvent event : events) {
-                sb.append("  - ").append(event.getTitle());
-                if (event.getDescription() != null && !event.getDescription().isBlank()) {
-                    String firstLine = event.getDescription().lines().findFirst().orElse("");
-                    if (!firstLine.isBlank() && !firstLine.equals(event.getTitle())) {
-                        sb.append(": ").append(firstLine);
-                    }
-                }
-                sb.append("\n");
-            }
+    private String extractFirstMeaningfulLine(String description) {
+        if (description == null || description.isBlank()) return null;
+        for (String line : description.split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.equals("기능별 변경 내용:")) continue;
+            if (trimmed.startsWith("[") && trimmed.endsWith("]")) continue;
+            if (trimmed.startsWith("- ")) trimmed = trimmed.substring(2).trim();
+            if (trimmed.length() >= 5) return trimmed;
         }
-    }
-    /**
-     * 이벤트 데이터에서 원인을 추출하여 서술합니다.
-     *
-     * <p>이벤트의 title/description에서 구체적인 변경 대상을 추출하여
-     * '무엇 때문에 변경이 필요했는지' 맥락을 제공합니다.</p>
-     */
-    private void appendCauseFromEvents(StringBuilder sb, List<ChangeEvent> events, String domainLabel) {
-        List<String> eventTitles = events.stream()
-                .map(ChangeEvent::getTitle)
-                .limit(3)
-                .toList();
-        sb.append(String.join(", ", eventTitles));
-        if (events.size() > 3) {
-            sb.append(" 등 ").append(events.size()).append("건의 ");
-        } else {
-            sb.append("에 대한 ");
-        }
-        sb.append(domainLabel).append(" 변경 요구사항이 발생하여 수정이 필요하였습니다.\n");
+        return null;
     }
     /**
      * description에서 의미 있는 줄만 추출합니다.
