@@ -655,10 +655,10 @@ public class ChangeEventService {
      * 의도를 압축합니다. 이를 통해 LLM에 전달되는 데이터가 의도 기반으로 사전 압축됩니다.</p>
      *
      * <p>변환 예시:
-     * - PlayerDetailEntity.java + "추가 필드: socialSecurityNumber, passportNumber" → "선수 상세 필드 추가"
-     * - ScoutCandidateService.java + "추가 필드: weatherRepository" → "날씨 정보 관리 추가"
-     * - ScoutCandidateService.java + "추가 메서드: findByWeather" → "스카우트 후보 기능 추가"
-     * - "새 클래스: ScoutObservationTagLookupService" → "스카우트 관찰 태그 조회 기능 신규 추가"</p>
+     * - PlayerDetailEntity.java + "추가 필드: socialSecurityNumber, passportNumber" → "선수 상세 관리 항목 추가"
+     * - ScoutCandidateService.java + "추가 필드: weatherRepository" → "날씨 데이터 연동 추가"
+     * - ScoutCandidateService.java + "추가 메서드: findByWeather" → "스카우트 후보 처리 기능 추가"
+     * - "새 클래스: ScoutObservationTagLookupService" → "스카우트 관찰 태그 조회 기능 신규 개발"</p>
      *
      * @param changeSummary Git diff에서 추출된 변경 요약
      * @param filePath 변경된 파일 경로 (엔티티명 추출에 사용)
@@ -683,18 +683,18 @@ public class ChangeEventService {
                         repoEntityNames.add(toReadableName(fn.replace("Repository", "")));
                     } else if (fn.endsWith("Service")) {
                         String name = toReadableName(fn.replace("Service", ""));
-                        results.add(name + " 처리를 연계할 수 있도록 연동");
+                        results.add(name + " 처리 연동");
                     } else {
                         hasRegularField = true;
                     }
                 }
                 // Repository 필드: 참조 엔티티 데이터 연동
                 if (!repoEntityNames.isEmpty()) {
-                    results.add(String.join(", ", repoEntityNames) + " 정보를 조회·관리할 수 있도록 추가");
+                    results.add(String.join(", ", repoEntityNames) + " 데이터 연동 추가");
                 }
                 // 일반 필드: 소속 엔티티 단위로 의도 압축 (주민번호, 여권번호 → 선수상세 필드 추가)
                 if (hasRegularField) {
-                    results.add(entityName != null ? entityName + " 정보를 추가로 관리할 수 있도록 항목 추가" : "관리 항목 추가");
+                    results.add(entityName != null ? entityName + " 관리 항목 추가" : "관리 항목 추가");
                 }
                 continue;
             }
@@ -702,13 +702,13 @@ public class ChangeEventService {
             if (trimmed.startsWith("새 클래스:")) {
                 String className = trimmed.substring("새 클래스:".length()).trim();
                 String featureName = extractFeatureName(className);
-                results.add(featureName + " 기능을 새로 사용할 수 있도록 개발");
+                results.add(featureName + " 기능 신규 개발");
                 continue;
             }
             // 메서드 추가 → 의도 기반 압축: 개별 메서드 동작 대신 소속 엔티티 단위로 표현
             if (trimmed.startsWith("추가 메서드:")) {
                 if (entityName != null) {
-                    results.add(entityName + " 관련 업무를 처리할 수 있도록 기능 추가");
+                    results.add(entityName + " 처리 기능 추가");
                 } else {
                     String methodsPart = trimmed.substring("추가 메서드:".length()).trim();
                     for (String methodName : methodsPart.split(",")) {
@@ -822,7 +822,7 @@ public class ChangeEventService {
             // is/has/can 같은 확인 메서드는 건너뜀
             return null;
         }
-        return targetKr + " " + action + " 기능을 사용할 수 있도록 추가";
+        return targetKr + " " + action + " 기능 추가";
     }
     /**
      * 영문 도메인 용어를 한국어로 변환합니다.
