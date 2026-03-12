@@ -373,6 +373,9 @@ public class ChangeEventService {
 
     /**
      * DB 스키마 변경으로부터 변경 이벤트를 생성합니다.
+     *
+     * <p>테이블명, 컬럼명, 인덱스명 등 기술 식별자를 한국어 도메인 용어로 변환하여
+     * 비개발자가 읽을 수 있는 자연어 제목과 설명을 생성합니다.</p>
      */
     private ChangeEvent buildSchemaChangeEvent(UUID idAnalysisRequest, UUID idProject,
                                                 DbSchemaResult.SchemaChange change) {
@@ -380,42 +383,42 @@ public class ChangeEventService {
         String severity;
         String correlationKey = change.getTableName();
         String description;
+        String tableKr = translateSnakeCase(change.getTableName());
         switch (change.getChangeType()) {
             case "TABLE_ADDED":
-                title = "테이블 추가: " + change.getTableName();
+                title = tableKr + " 데이터 관리 테이블 추가";
                 severity = "HIGH";
-                description = "새로운 테이블 '" + change.getTableName() + "'이(가) 추가되었습니다.";
+                description = tableKr + " 정보를 관리하기 위한 테이블 추가";
                 break;
             case "TABLE_REMOVED":
-                title = "테이블 삭제: " + change.getTableName();
+                title = tableKr + " 데이터 테이블 삭제";
                 severity = "HIGH";
-                description = "테이블 '" + change.getTableName() + "'이(가) 삭제되었습니다.";
+                description = tableKr + " 관련 테이블 삭제";
                 break;
             case "COLUMN_ADDED":
-                title = "컬럼 추가: " + change.getTableName() + "." + change.getColumnName();
+                title = tableKr + " 관리 항목 추가";
                 severity = "MEDIUM";
-                description = "테이블 '" + change.getTableName() + "'에 컬럼 '" + change.getColumnName() + "'이(가) 추가되었습니다.";
+                description = tableKr + " 테이블에 신규 관리 항목 추가";
                 break;
             case "COLUMN_REMOVED":
-                title = "컬럼 삭제: " + change.getTableName() + "." + change.getColumnName();
+                title = tableKr + " 관리 항목 삭제";
                 severity = "HIGH";
-                description = "테이블 '" + change.getTableName() + "'에서 컬럼 '" + change.getColumnName() + "'이(가) 삭제되었습니다.";
+                description = tableKr + " 테이블에서 관리 항목 삭제";
                 break;
             case "COLUMN_TYPE_CHANGED":
-                title = "컬럼 타입 변경: " + change.getTableName() + "." + change.getColumnName();
+                title = tableKr + " 관리 항목 형식 변경";
                 severity = "HIGH";
-                description = "테이블 '" + change.getTableName() + "'의 컬럼 '" + change.getColumnName()
-                        + "' 타입이 '" + change.getOldDataType() + "'에서 '" + change.getNewDataType() + "'으로 변경되었습니다.";
+                description = tableKr + " 테이블 관리 항목의 데이터 형식 변경";
                 break;
             case "INDEX_ADDED":
-                title = "인덱스 추가: " + change.getTableName() + "." + change.getIndexName();
+                title = tableKr + " 조회 성능 개선";
                 severity = "LOW";
-                description = "테이블 '" + change.getTableName() + "'에 인덱스 '" + change.getIndexName() + "'이(가) 추가되었습니다.";
+                description = tableKr + " 테이블 조회 성능 향상을 위한 색인 추가";
                 break;
             case "INDEX_REMOVED":
-                title = "인덱스 삭제: " + change.getTableName() + "." + change.getIndexName();
+                title = tableKr + " 불필요 색인 제거";
                 severity = "LOW";
-                description = "테이블 '" + change.getTableName() + "'에서 인덱스 '" + change.getIndexName() + "'이(가) 삭제되었습니다.";
+                description = tableKr + " 테이블에서 불필요한 색인 제거";
                 break;
             default:
                 log.warn("알 수 없는 스키마 변경 타입: {}", change.getChangeType());
@@ -436,6 +439,9 @@ public class ChangeEventService {
 
     /**
      * API endpoint 변경으로부터 변경 이벤트를 생성합니다.
+     *
+     * <p>HTTP 메서드와 경로를 한국어 동작과 리소스명으로 변환하여
+     * "스카우트 조회 기능 추가" 형태의 자연어 제목을 생성합니다.</p>
      */
     private ChangeEvent buildApiChangeEvent(UUID idAnalysisRequest, UUID idProject,
                                              ApiAnalyzerResult.EndpointChange change) {
@@ -443,16 +449,18 @@ public class ChangeEventService {
         String severity;
         String description;
         String correlationKey = extractApiPrefix(change.getPath());
+        String resource = extractResourceFromPath(change.getPath());
+        String action = httpMethodToAction(change.getHttpMethod());
         switch (change.getChangeType()) {
             case "ENDPOINT_ADDED":
-                title = "API 추가: " + change.getHttpMethod() + " " + change.getPath();
+                title = resource + " " + action + " 기능 추가";
                 severity = "MEDIUM";
-                description = "새로운 API endpoint '" + change.getHttpMethod() + " " + change.getPath() + "'이(가) 추가되었습니다.";
+                description = resource + " " + action + " 기능 추가";
                 break;
             case "ENDPOINT_REMOVED":
-                title = "API 삭제: " + change.getHttpMethod() + " " + change.getPath();
+                title = resource + " " + action + " 기능 삭제";
                 severity = "HIGH";
-                description = "API endpoint '" + change.getHttpMethod() + " " + change.getPath() + "'이(가) 삭제되었습니다.";
+                description = resource + " " + action + " 기능 삭제";
                 break;
             default:
                 log.warn("알 수 없는 API 변경 타입: {}", change.getChangeType());
@@ -538,15 +546,6 @@ public class ChangeEventService {
         return events;
     }
     /**
-     * 레포지토리의 커밋 이력을 요약한 제목을 생성합니다.
-     */
-    private String buildRepoTitle(String repoName, List<GitDiffResult.CommitInfo> commits) {
-        if (commits.size() == 1) {
-            return commits.get(0).getMessage();
-        }
-        return repoName + " 코드 변경 (" + commits.size() + "건 커밋)";
-    }
-    /**
      * description에서 실제 변경 항목을 추출하여 구체적인 제목을 생성합니다.
      *
      * <p>description의 "- " 항목들 중 주요 내용을 조합하여
@@ -556,13 +555,13 @@ public class ChangeEventService {
         if (description == null || description.isBlank()) {
             return "프로젝트 코드 변경 (" + commitCount + "건 커밋)";
         }
-        // "- " 항목에서 실제 변경 내용 추출
+        // "- " 항목에서 한국어가 포함된 실제 변경 내용만 추출
         List<String> items = new ArrayList<>();
         for (String line : description.split("\n")) {
             String trimmed = line.trim();
             if (trimmed.startsWith("- ")) {
                 String item = trimmed.substring(2).trim();
-                if (item.length() >= 3) {
+                if (item.length() >= 3 && item.matches(".*[가-힣].*")) {
                     items.add(item);
                 }
             }
@@ -655,10 +654,10 @@ public class ChangeEventService {
      * 의도를 압축합니다. 이를 통해 LLM에 전달되는 데이터가 의도 기반으로 사전 압축됩니다.</p>
      *
      * <p>변환 예시:
-     * - PlayerDetailEntity.java + "추가 필드: socialSecurityNumber, passportNumber" → "선수 상세 관리 항목 추가"
-     * - ScoutCandidateService.java + "추가 필드: weatherRepository" → "날씨 데이터 연동 추가"
-     * - ScoutCandidateService.java + "추가 메서드: findByWeather" → "스카우트 후보 처리 기능 추가"
-     * - "새 클래스: ScoutObservationTagLookupService" → "스카우트 관찰 태그 조회 기능 신규 개발"</p>
+     * - 선수 상세 엔티티 파일 + 필드 추가 → "선수 상세 관리 항목 추가"
+     * - 스카우트 후보 서비스 파일 + 저장소 참조 추가 → "날씨 데이터 연동 추가"
+     * - 스카우트 후보 서비스 파일 + 메서드 추가 → "스카우트 후보 처리 기능 추가"
+     * - 신규 파일 생성 → "스카우트 관찰 태그 조회 기능 신규 개발"</p>
      *
      * @param changeSummary Git diff에서 추출된 변경 요약
      * @param filePath 변경된 파일 경로 (엔티티명 추출에 사용)
@@ -698,11 +697,13 @@ public class ChangeEventService {
                 }
                 continue;
             }
-            // 새 클래스 → 기능명 추출 (이미 엔티티 단위이므로 그대로 유지)
+            // 새 클래스 → 기능명 추출, 한국어로 변환 가능한 경우만 포함
             if (trimmed.startsWith("새 클래스:")) {
                 String className = trimmed.substring("새 클래스:".length()).trim();
                 String featureName = extractFeatureName(className);
-                results.add(featureName + " 기능 신규 개발");
+                if (featureName.matches(".*[가-힣].*")) {
+                    results.add(featureName + " 기능 신규 개발");
+                }
                 continue;
             }
             // 메서드 추가 → 의도 기반 압축: 개별 메서드 동작 대신 소속 엔티티 단위로 표현
@@ -718,12 +719,15 @@ public class ChangeEventService {
                 }
                 continue;
             }
-            // 그 외: 기술 용어 제거 후 남은 내용
+            // 그 외: 기술 용어 제거 후 한국어가 포함된 내용만 포함
             String cleaned = trimmed
                     .replaceAll("\\([+\\-\\d/\\s]+lines?\\)", "")
                     .replaceAll("@\\w+", "")
+                    .replaceAll("\\b[A-Z][a-zA-Z]*(Service|Controller|Repository|Entity|Dto|Handler|Impl|Mapper|Converter)\\b", "")
+                    .replaceAll("\\b[a-z]+\\.[a-z]+\\.[a-z.]+\\b", "")
+                    .replaceAll("\\s+", " ")
                     .trim();
-            if (!cleaned.isEmpty() && !cleaned.matches("^\\s*$")) {
+            if (!cleaned.isEmpty() && cleaned.matches(".*[가-힣].*")) {
                 results.add(cleaned);
             }
         }
@@ -779,8 +783,10 @@ public class ChangeEventService {
         return toReadableName(name);
     }
     /**
-     * 메서드명을 "동작 + 대상" 형식의 업무 설명으로 변환합니다.
-     * 예: findOrCreateTeamExternal → "팀 외부 정보 조회/생성 기능 추가"
+     * 메서드 동작을 "대상 + 동작 + 기능 추가" 형식의 업무 설명으로 변환합니다.
+     *
+     * <p>한국어로 변환 가능한 대상만 출력하며, 번역 불가능한 경우 null을 반환합니다.
+     * 예: 팀 외부 정보 조회/생성 → "팀 외부 정보 조회/생성 기능 추가"</p>
      */
     private String convertMethodToAction(String methodName) {
         if (methodName == null || methodName.isBlank()) return null;
@@ -822,6 +828,8 @@ public class ChangeEventService {
             // is/has/can 같은 확인 메서드는 건너뜀
             return null;
         }
+        // 한국어로 변환되지 않은 대상은 비개발자에게 무의미하므로 제외
+        if (!targetKr.matches(".*[가-힣].*")) return null;
         return targetKr + " " + action + " 기능 추가";
     }
     /**
@@ -882,6 +890,36 @@ public class ChangeEventService {
         // 혹시 남아 있는 한글 뒤 영어 복수형 접미사 제거 (예: "팀s" → "팀")
         result = result.replaceAll("([가-힣])(ies|es|s)\\b", "$1");
         return result.trim();
+    }
+    /** snake_case 식별자를 한국어 자연어로 변환합니다. */
+    private String translateSnakeCase(String snakeName) {
+        if (snakeName == null || snakeName.isBlank()) return "";
+        String spaced = snakeName.replace('_', ' ').toLowerCase().trim();
+        return applyDomainTerms(spaced);
+    }
+    /** API 경로에서 리소스명을 추출하여 한국어로 변환합니다. */
+    private String extractResourceFromPath(String path) {
+        if (path == null) return "기능";
+        String[] segments = path.split("/");
+        for (int i = segments.length - 1; i >= 0; i--) {
+            String seg = segments[i].trim();
+            if (!seg.isEmpty() && !seg.startsWith("{") && !seg.equals("api")) {
+                String translated = translateSnakeCase(seg);
+                if (translated.matches(".*[가-힣].*")) return translated;
+            }
+        }
+        return "기능";
+    }
+    /** HTTP 메서드를 한국어 동작으로 변환합니다. */
+    private String httpMethodToAction(String method) {
+        if (method == null) return "처리";
+        return switch (method.toUpperCase()) {
+            case "GET" -> "조회";
+            case "POST" -> "등록";
+            case "PUT", "PATCH" -> "수정";
+            case "DELETE" -> "삭제";
+            default -> "처리";
+        };
     }
 
     /**

@@ -395,52 +395,63 @@ public class ReportGeneratorService {
      * description의 첫 번째 의미 있는 줄을 반환합니다.
      */
     private String extractFirstMeaningfulLine(String description) {
-        if (description == null || description.isBlank()) return null;
-        for (String line : description.split("\n")) {
-            String trimmed = line.trim();
-            if (trimmed.isEmpty() || trimmed.equals("기능별 변경 내용:")) continue;
-            if (trimmed.startsWith("[") && trimmed.endsWith("]")) continue;
-            // 통계 헤더 줄 건너뜀 (예: "[repo] 커밋 692건, 변경 파일 2081개", "관련 기능: scout, ...")
-            if (trimmed.matches(".*커밋\\s*\\d+건.*변경\\s*파일\\s*\\d+개.*")) continue;
-            if (trimmed.startsWith("관련 기능:")) continue;
-            if (trimmed.startsWith("- ")) trimmed = trimmed.substring(2).trim();
-            if (trimmed.length() >= 5) return trimmed;
-        }
-        return null;
+        List<String> lines = extractMeaningfulLines(description != null ? description : "", 1);
+        return lines.isEmpty() ? null : lines.get(0);
     }
     /**
      * description에서 의미 있는 줄만 추출합니다.
      *
-     * <p>빈 줄, 메타 정보(대괄호 헤더), 너무 짧은 줄을 건너뛰고
-     * 실질적 내용이 담긴 줄을 최대 maxLines개까지 반환합니다.</p>
+     * <p>[카테고리] 헤더를 기억하여 하위 항목에 "카테고리: 항목" 형식으로 접두사를 붙이고,
+     * 쉼표로 연결된 긴 줄은 개별 항목으로 분리합니다.
+     * 이를 통해 보고서의 그룹핑 로직에서 카테고리별 정리가 가능해집니다.</p>
      */
     private List<String> extractMeaningfulLines(String description, int maxLines) {
         List<String> result = new ArrayList<>();
+        String currentCategory = null;
         for (String line : description.split("\n")) {
             String trimmed = line.trim();
             if (trimmed.isEmpty()) continue;
-            // [카테고리명] 형태의 헤더 라인은 건너뜀
-            if (trimmed.startsWith("[") && trimmed.endsWith("]")) continue;
-            // "기능별 변경 내용:" 같은 메타 라인은 건너뜀
+            // [카테고리명] 형태의 헤더 → 현재 카테고리로 기억하고 다음 항목에 접두사로 사용
+            if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                currentCategory = trimmed.substring(1, trimmed.length() - 1);
+                continue;
+            }
             if (trimmed.equals("기능별 변경 내용:")) continue;
-            // 통계 헤더 줄 건너뜀 (예: "[repo] 커밋 692건, 변경 파일 2081개", "관련 기능: scout, ...")
             if (trimmed.matches(".*커밋\\s*\\d+건.*변경\\s*파일\\s*\\d+개.*")) continue;
             if (trimmed.startsWith("관련 기능:")) continue;
-            // "- " 접두사가 있으면 제거
             if (trimmed.startsWith("- ")) trimmed = trimmed.substring(2).trim();
             if (trimmed.length() < 3) continue;
-            result.add(trimmed);
+            // 쉼표로 연결된 긴 항목은 개별 항목으로 분리
+            if (trimmed.contains(", ") && trimmed.length() > 60) {
+                for (String part : trimmed.split(",\\s+")) {
+                    String partTrimmed = part.trim();
+                    if (partTrimmed.length() < 3) continue;
+                    addWithCategory(result, partTrimmed, currentCategory);
+                    if (result.size() >= maxLines) return result;
+                }
+                continue;
+            }
+            addWithCategory(result, trimmed, currentCategory);
             if (result.size() >= maxLines) break;
         }
         return result;
+    }
+    /** 카테고리가 있으면 "카테고리: 항목" 형식으로 접두사를 붙여 추가합니다. */
+    private void addWithCategory(List<String> result, String item, String category) {
+        if (category != null && !item.contains(": ")) {
+            result.add(category + ": " + item);
+        } else {
+            result.add(item);
+        }
     }
     /**
      * 이벤트 목록에서 항목을 추출하고 유사 항목을 그룹핑하여
      * "번호. 그룹제목 + 하위 항목" 형식으로 출력합니다.
      *
      * <p>출력 형식 예시:
-     * 1. **player 테이블 컬럼 추가**
-     *    - passport_number, social_security_number
+     * 1. **선수 관련**
+     *    - 테이블에 신규 관리 항목 추가
+     *    - 관리 항목 형식 변경
      * 2. **스카우트 관련**
      *    - 후보 처리 기능 추가
      *    - 관찰 태그 조회 기능 신규 개발</p>
@@ -448,7 +459,7 @@ public class ReportGeneratorService {
     private void appendGroupedEventItems(StringBuilder sb, List<ChangeEvent> events, String indent) {
         List<String> items = new ArrayList<>();
         for (ChangeEvent event : events) {
-            List<String> details = extractMeaningfulLines(event.getDescription(), 10);
+            List<String> details = extractMeaningfulLines(event.getDescription(), 50);
             if (details.isEmpty()) {
                 items.add(event.getTitle());
             } else {
@@ -484,25 +495,18 @@ public class ReportGeneratorService {
     /**
      * 항목 문자열에서 병합 키와 상세 정보를 분리합니다.
      *
-     * <p>"컬럼 추가: player.passport_number" → ["player 컬럼 추가", "passport_number"]
+     * <p>"선수 테이블에 신규 관리 항목 추가" → ["선수 관련", "테이블에 신규 관리 항목 추가"]
      * "스카우트 후보 처리 기능 추가" → ["스카우트 관련", "후보 처리 기능 추가"]</p>
      *
      * @return [0]: 병합 키, [1]: 상세 정보
      */
     private String[] extractMergeKeyAndDetail(String item) {
         if (item == null || item.isBlank()) return new String[]{"기타", ""};
-        // "컬럼 추가: player.x" → key: "player 컬럼 추가", detail: "x"
+        // "항목 추가: 여권번호" → key: "항목 추가", detail: "여권번호"
         int colonIdx = item.indexOf(": ");
         if (colonIdx > 0) {
             String prefix = item.substring(0, colonIdx).trim();
             String value = item.substring(colonIdx + 2).trim();
-            // "컬럼/인덱스" + "table.column" → 테이블 단위 그룹핑
-            if (value.contains(".") && containsAny(prefix, "컬럼", "인덱스")) {
-                int dotIdx = value.indexOf('.');
-                String tableName = value.substring(0, dotIdx);
-                String columnName = value.substring(dotIdx + 1);
-                return new String[]{tableName + " " + prefix, columnName};
-            }
             return new String[]{prefix, value};
         }
         // 자유 텍스트: 첫 번째 한글 단어를 키로 사용
