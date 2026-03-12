@@ -839,6 +839,10 @@ public class LlmDescriptionCompressorService {
             }
             redistributed += items.size();
         }
+        // 재분배 후 각 메뉴 내 중복 제거
+        for (Map.Entry<String, List<String>> entry : result.entrySet()) {
+            entry.setValue(deduplicateItems(entry.getValue()));
+        }
         log.debug("고아 카테고리 재분배: {}개 카테고리 {}건 → 기존 메뉴로 흡수",
                 orphans.size(), redistributed);
         return result;

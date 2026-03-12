@@ -83,8 +83,8 @@ public class DraftGeneratorService {
         String[] lines = description.split("\n");
         boolean inFeatureSection = false;
         String currentCategory = null;
-        // 키워드 → 항목 목록 (순서 유지)
-        Map<String, List<String>> itemsByKeyword = new LinkedHashMap<>();
+        // 키워드 → 항목 목록 (순서 유지, 중복 제거)
+        Map<String, Set<String>> itemsByKeyword = new LinkedHashMap<>();
         for (String line : lines) {
             String trimmed = line.trim();
             if (!inFeatureSection) {
@@ -98,18 +98,18 @@ public class DraftGeneratorService {
                 currentCategory = categoryMatcher.group(1);
             } else if (trimmed.startsWith("- ") && currentCategory != null) {
                 String keyword = extractKeyword(currentCategory);
-                itemsByKeyword.computeIfAbsent(keyword, k -> new ArrayList<>())
+                itemsByKeyword.computeIfAbsent(keyword, k -> new LinkedHashSet<>())
                         .add(trimmed.substring(2).trim());
             } else if (!trimmed.isEmpty() && currentCategory != null) {
                 String keyword = extractKeyword(currentCategory);
-                itemsByKeyword.computeIfAbsent(keyword, k -> new ArrayList<>())
+                itemsByKeyword.computeIfAbsent(keyword, k -> new LinkedHashSet<>())
                         .add(trimmed);
             }
         }
         // 키워드별 collapse 블록 생성
-        for (Map.Entry<String, List<String>> entry : itemsByKeyword.entrySet()) {
+        for (Map.Entry<String, Set<String>> entry : itemsByKeyword.entrySet()) {
             if (!entry.getValue().isEmpty()) {
-                appendCollapseBlock(draft, entry.getKey(), entry.getValue());
+                appendCollapseBlock(draft, entry.getKey(), new ArrayList<>(entry.getValue()));
             }
         }
     }

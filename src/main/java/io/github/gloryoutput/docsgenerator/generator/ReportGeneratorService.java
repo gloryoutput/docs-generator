@@ -157,71 +157,102 @@ public class ReportGeneratorService {
         sb.append("### 목적\n\n");
         sb.append("본 보고서는 ").append(projectName).append(" 프로젝트에서 ")
                 .append(startDate).append(" ~ ").append(endDate)
-                .append(" 기간에 수행된 변경 작업(총 ").append(allEvents.size()).append("건)의 ")
-                .append("배경과 결과를 정리한 문서입니다.\n\n");
+                .append(" 기간 동안 수행된 소프트웨어 변경 작업에 대한 보고서입니다. ")
+                .append("해당 기간에 총 ").append(allEvents.size()).append("건의 변경이 이루어졌으며, ");
+        // 카테고리별 요약을 목적에 포함
+        if (!categoryCount.isEmpty()) {
+            List<String> catDescriptions = new ArrayList<>();
+            categoryCount.forEach((k, v) -> catDescriptions.add(formatCategoryName(k) + " 변경 " + v + "건"));
+            sb.append(String.join(", ", catDescriptions)).append("이 포함되어 있습니다. ");
+        }
+        sb.append("각 변경의 배경, 진행 과정, 결과 및 후속 조치 사항을 정리하였습니다.\n\n");
         // ### 발생한 문제
         sb.append("### 발생한 문제\n\n");
         sb.append("아래 항목들에 대해 신규 개발 또는 기존 기능 개선이 필요하였습니다.\n\n");
         for (ChangeEvent event : allEvents) {
-            sb.append("- ").append(event.getTitle()).append("\n");
-        }
-        sb.append("\n");
-        // ### 문제 원인
-        sb.append("### 문제 원인\n\n");
-        sb.append("위 변경은 업무 요구사항에 따라 다음과 같은 원인으로 진행되었습니다.\n\n");
-        for (ChangeEvent event : allEvents) {
             sb.append("- **").append(event.getTitle()).append("**: ");
-            String firstLine = extractFirstMeaningfulLine(event.getDescription());
-            if (firstLine != null) {
-                sb.append(firstLine);
+            String problemLine = extractFirstMeaningfulLine(event.getDescription());
+            if (problemLine != null) {
+                sb.append(problemLine);
             } else {
-                sb.append("해당 기능의 신규 개발 또는 기존 구조 개선 요구");
+                sb.append("해당 기능에 대한 신규 구현 또는 기존 동작 방식의 개선이 요구되었습니다");
             }
             sb.append("\n");
         }
         sb.append("\n");
+        // ### 문제 원인
+        sb.append("### 문제 원인\n\n");
+        sb.append("위 변경 사항들은 다음과 같은 업무상의 요구사항 및 기술적 필요에 의해 진행되었습니다.\n\n");
+        for (ChangeEvent event : allEvents) {
+            sb.append("- **").append(event.getTitle()).append("**\n");
+            List<String> causeLines = extractMeaningfulLines(
+                    event.getDescription() != null ? event.getDescription() : "", 3);
+            if (!causeLines.isEmpty()) {
+                for (String line : causeLines) {
+                    sb.append("  - ").append(line).append("\n");
+                }
+            } else {
+                sb.append("  - 해당 기능이 기존 시스템에 존재하지 않거나, 현재 구현이 업무 요건에 부합하지 않아 변경이 필요하였습니다.\n");
+            }
+        }
+        sb.append("\n");
         // ### 문제 해결 과정
         sb.append("### 문제 해결 과정\n\n");
+        sb.append("위 문제를 해결하기 위해 다음과 같은 단계로 작업을 수행하였습니다.\n\n");
         int stepIndex = 1;
         for (CorrelatedGroup group : groups) {
             if (group.getEvents() == null || group.getEvents().isEmpty()) continue;
             sb.append(stepIndex++).append(". **").append(group.getTitle()).append("**\n");
             for (ChangeEvent event : group.getEvents()) {
                 List<String> lines = extractMeaningfulLines(
-                        event.getDescription() != null ? event.getDescription() : "", 2);
+                        event.getDescription() != null ? event.getDescription() : "", 3);
                 if (!lines.isEmpty()) {
                     for (String line : lines) {
                         sb.append("   - ").append(line).append("\n");
                     }
                 } else {
-                    sb.append("   - ").append(event.getTitle()).append("\n");
+                    sb.append("   - ").append(event.getTitle()).append(" 작업을 수행하였습니다.\n");
                 }
             }
         }
         sb.append("\n");
         // ### 결과
         sb.append("### 결과\n\n");
+        sb.append("상기 작업을 통해 다음과 같은 변경이 완료되었습니다.\n\n");
         for (ChangeEvent event : allEvents) {
-            sb.append("- ").append(event.getTitle()).append(" — 완료\n");
+            sb.append("- **").append(event.getTitle()).append("** — ");
+            String resultDetail = extractFirstMeaningfulLine(event.getDescription());
+            if (resultDetail != null) {
+                sb.append(resultDetail).append(" (완료)");
+            } else {
+                sb.append("정상적으로 반영 완료");
+            }
+            sb.append("\n");
         }
         sb.append("\n");
         // ### 개선 및 예방 방안
         sb.append("### 개선 및 예방 방안\n\n");
-        if (highEvents.isEmpty() && allEvents.stream().noneMatch(e ->
-                "SCHEMA_CHANGE".equals(e.getCategory()) || containsAny(e.getTitle(), "삭제", "제거"))) {
-            sb.append("- 별도의 후속 조치가 필요하지 않습니다.\n");
-        } else {
-            for (ChangeEvent event : highEvents) {
-                sb.append("- ").append(event.getTitle()).append(" — 배포 후 정상 동작 확인 필요\n");
+        sb.append("이번 변경과 관련하여 다음 사항에 대한 후속 점검이 필요합니다.\n\n");
+        boolean hasFollowUp = false;
+        for (ChangeEvent event : highEvents) {
+            sb.append("- **").append(event.getTitle()).append("** — 심각도가 높은 변경으로, 배포 후 해당 기능의 정상 동작 여부를 반드시 확인하여야 합니다.\n");
+            hasFollowUp = true;
+        }
+        for (ChangeEvent event : allEvents) {
+            if ("HIGH".equals(event.getSeverity())) continue;
+            if ("SCHEMA_CHANGE".equals(event.getCategory())) {
+                sb.append("- **").append(event.getTitle()).append("** — 데이터베이스 스키마가 변경되었으므로, 기존 데이터의 정합성 및 관련 쿼리·인덱스의 정상 동작을 확인하여야 합니다.\n");
+                hasFollowUp = true;
+            } else if (containsAny(event.getTitle(), "삭제", "제거")) {
+                sb.append("- **").append(event.getTitle()).append("** — 기존 기능이 삭제 또는 제거되었으므로, 해당 기능을 사용하던 외부 시스템 및 화면의 영향 범위를 확인하여야 합니다.\n");
+                hasFollowUp = true;
+            } else if ("API_CHANGE".equals(event.getCategory())) {
+                sb.append("- **").append(event.getTitle()).append("** — API가 변경되었으므로, 해당 API를 호출하는 클라이언트의 호환성을 확인하여야 합니다.\n");
+                hasFollowUp = true;
             }
-            for (ChangeEvent event : allEvents) {
-                if ("HIGH".equals(event.getSeverity())) continue;
-                if ("SCHEMA_CHANGE".equals(event.getCategory())) {
-                    sb.append("- ").append(event.getTitle()).append(" — 기존 데이터 정합성 확인 필요\n");
-                } else if (containsAny(event.getTitle(), "삭제", "제거")) {
-                    sb.append("- ").append(event.getTitle()).append(" — 기존 연동 영향 확인 필요\n");
-                }
-            }
+        }
+        if (!hasFollowUp) {
+            sb.append("- 이번 변경은 기존 기능에 대한 영향이 제한적이므로, 별도의 후속 조치가 필요하지 않습니다.\n");
         }
         return sb.toString();
     }
