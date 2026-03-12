@@ -84,7 +84,7 @@ public class CorrelationService {
         }
         if (hasCode && !hasSchema && !hasApi && !hasDependency) {
             if ("PROJECT".equals(correlationKey)) {
-                return "프로젝트 코드 변경";
+                return "소프트웨어 변경";
             }
             return "코드 변경: " + correlationKey;
         }

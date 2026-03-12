@@ -34,16 +34,15 @@ public class ReportGeneratorService {
     /**
      * 최종 Markdown 보고서를 생성합니다.
      *
-     * <p>원본 보고서(고영 오류 수정 완료 보고서) 형식을 따라 다음 구조로 생성합니다:
+     * <p>원본 보고서 형식을 따라 다음 구조로 생성합니다:
      * 1) 메타 정보 테이블
-     * 2) 6개 섹션 (목적, 발생한 문제, 문제 원인, 문제 해결 과정, 결과, 개선 및 예방 방안)
-     * rawDraft(기능별 변경 상세)는 "문제 해결 과정" 섹션 내에 collapse 블록으로 포함됩니다.</p>
+     * 2) 6개 섹션 (목적, 발생한 문제, 문제 원인, 문제 해결 과정, 결과, 개선 및 예방 방안)</p>
      *
      * @param analysisRequest 분석 요청 엔티티
      * @param projectName 프로젝트명
      * @param groups 상관관계 그룹 목록
      * @param polishedDraft LLM이 다듬은 6개 섹션
-     * @param rawDraft 기능별 변경 상세 (collapse 블록)
+     * @param rawDraft 미사용 (하위 호환용)
      * @return 완성된 Markdown 보고서 텍스트
      */
     public String generateReport(AnalysisRequest analysisRequest, String projectName,
@@ -54,26 +53,24 @@ public class ReportGeneratorService {
         String startDate = analysisRequest.getStartDate().format(DATE_FORMATTER);
         String endDate = analysisRequest.getEndDate().format(DATE_FORMATTER);
         String createdDate = LocalDateTime.now().format(DATE_KR_FORMATTER);
-        // 카테고리별·심각도별 통계
+        // 카테고리별 통계 (클라이언트에게 무의미한 CODE_CHANGE는 제외)
         Map<String, Integer> categoryCount = new LinkedHashMap<>();
-        Map<String, Integer> severityCount = new LinkedHashMap<>();
         for (CorrelatedGroup group : groups) {
             if (group.getEvents() == null) continue;
             for (ChangeEvent event : group.getEvents()) {
-                categoryCount.merge(event.getCategory(), 1, Integer::sum);
-                severityCount.merge(event.getSeverity(), 1, Integer::sum);
+                if (!"CODE_CHANGE".equals(event.getCategory())) {
+                    categoryCount.merge(event.getCategory(), 1, Integer::sum);
+                }
             }
         }
         StringBuilder report = new StringBuilder();
-        // 보고서 제목
         report.append("# 소프트웨어 변경 보고서\n\n");
         report.append("작성일자: ").append(createdDate).append("\n\n");
-        // 메타 정보 테이블
         report.append("| 항목 | 내용 |\n");
         report.append("|------|------|\n");
         report.append("| 프로젝트 | ").append(projectName).append(" |\n");
         report.append("| 분석 기간 | ").append(startDate).append(" ~ ").append(endDate).append(" |\n");
-        report.append("| 총 변경 이벤트 | ").append(totalEvents).append("건 |\n");
+        report.append("| 총 변경 사항 | ").append(totalEvents).append("건 |\n");
         if (!categoryCount.isEmpty()) {
             StringBuilder catSummary = new StringBuilder();
             categoryCount.forEach((k, v) -> {
@@ -82,22 +79,11 @@ public class ReportGeneratorService {
             });
             report.append("| 변경 유형 | ").append(catSummary).append(" |\n");
         }
-        if (!severityCount.isEmpty()) {
-            StringBuilder sevSummary = new StringBuilder();
-            severityCount.forEach((k, v) -> {
-                if (!sevSummary.isEmpty()) sevSummary.append(", ");
-                sevSummary.append(formatSeverityName(k)).append(" ").append(v).append("건");
-            });
-            report.append("| 심각도 분포 | ").append(sevSummary).append(" |\n");
-        }
         report.append("\n");
         // 6개 섹션 본문 (목적, 발생한 문제, 문제 원인, 문제 해결 과정, 결과, 개선 및 예방 방안)
-        // LLM 성공 시 LLM 결과, 실패 시 이벤트 데이터 기반 fallback 생성
         String sections = (polishedDraft != null && !polishedDraft.isBlank())
                 ? polishedDraft
-                : buildFallbackSections(projectName, startDate, endDate, groups, categoryCount, severityCount);
-        // rawDraft(기능별 변경 상세)를 "문제 해결 과정" 섹션 끝에 삽입
-        sections = injectRawDraftIntoSections(sections, rawDraft);
+                : buildFallbackSections(projectName, startDate, endDate, groups, categoryCount);
         report.append(sections);
         if (!sections.endsWith("\n")) {
             report.append("\n");
@@ -113,7 +99,7 @@ public class ReportGeneratorService {
      * @param projectName 프로젝트명
      * @param groups 상관관계 그룹 목록
      * @param polishedDraft LLM이 다듬은 6개 섹션
-     * @param rawDraft 원본 초안 (프로젝트 코드 변경 상세)
+     * @param rawDraft 미사용 (하위 호환용)
      * @return 저장된 Report 엔티티
      */
     @Transactional
@@ -141,8 +127,7 @@ public class ReportGeneratorService {
      */
     private String buildFallbackSections(String projectName, String startDate, String endDate,
                                           List<CorrelatedGroup> groups,
-                                          Map<String, Integer> categoryCount,
-                                          Map<String, Integer> severityCount) {
+                                          Map<String, Integer> categoryCount) {
         log.info("LLM 미사용 - fallback 6개 섹션 생성 (프로젝트: {})", projectName);
         // 전체 이벤트 수집 및 분류 (문제 vs 변경)
         List<ChangeEvent> allEvents = new ArrayList<>();
@@ -191,7 +176,7 @@ public class ReportGeneratorService {
             int probIdx = 1;
             for (ChangeEvent event : problemEvents) {
                 List<String> details = extractMeaningfulLines(event.getDescription(), 10);
-                sb.append(probIdx++).append(". **").append(event.getTitle()).append("**\n");
+                sb.append(probIdx++).append(". **").append(sanitizeForClient(event.getTitle())).append("**\n");
                 if (details.isEmpty()) {
                     sb.append("   - ").append(buildProblemStatement(event)).append("\n");
                 } else {
@@ -256,39 +241,77 @@ public class ReportGeneratorService {
             }
             sb.append("\n");
         }
-        // ### 결과: 문제 수정과 기능 변경을 구분하여 완료 상태 기술
+        // ### 결과: 카테고리별로 분류하여 완료 상태 기술
         sb.append("### 결과\n\n");
         sb.append("상기 작업을 통해 다음과 같은 변경이 완료되었습니다.\n\n");
-        appendGroupedEventItems(sb, allEvents, "");
+        int resultIdx = 1;
+        if (!problemEvents.isEmpty()) {
+            sb.append(resultIdx++).append(". **오류 수정 완료** (").append(problemEvents.size()).append("건)\n");
+            appendGroupedEventItems(sb, problemEvents, "   ");
+        }
+        List<ChangeEvent> schemaEvents = featureEvents.stream()
+                .filter(e -> "SCHEMA_CHANGE".equals(e.getCategory())).toList();
+        if (!schemaEvents.isEmpty()) {
+            sb.append(resultIdx++).append(". **데이터 관리 항목 변경 완료** (").append(schemaEvents.size()).append("건)\n");
+            appendGroupedEventItems(sb, schemaEvents, "   ");
+        }
+        List<ChangeEvent> apiEvents = featureEvents.stream()
+                .filter(e -> "API_CHANGE".equals(e.getCategory())).toList();
+        if (!apiEvents.isEmpty()) {
+            sb.append(resultIdx++).append(". **화면 기능 변경 완료** (").append(apiEvents.size()).append("건)\n");
+            appendGroupedEventItems(sb, apiEvents, "   ");
+        }
+        List<ChangeEvent> otherEvents = featureEvents.stream()
+                .filter(e -> !"SCHEMA_CHANGE".equals(e.getCategory())
+                        && !"API_CHANGE".equals(e.getCategory())).toList();
+        if (!otherEvents.isEmpty()) {
+            sb.append(resultIdx++).append(". **기능 개발 및 개선 완료** (").append(otherEvents.size()).append("건)\n");
+            appendGroupedEventItems(sb, otherEvents, "   ");
+        }
         sb.append("\n");
-        // ### 개선 및 예방 방안
+        // ### 개선 및 예방 방안: 유형별로 묶어서 자연스러운 문장으로 서술
         sb.append("### 개선 및 예방 방안\n\n");
-        sb.append("이번 변경과 관련하여 다음 사항에 대한 후속 점검이 필요합니다.\n\n");
-        boolean hasFollowUp = false;
-        for (ChangeEvent event : highEvents) {
-            sb.append("- **").append(event.getTitle()).append("** — 중요도가 높은 변경으로, 배포 후 해당 기능의 정상 동작 여부를 반드시 확인하여야 합니다.\n");
-            hasFollowUp = true;
+        sb.append("이번 변경 적용 후 다음 사항을 확인하시기 바랍니다.\n\n");
+        int followUpIdx = 1;
+        // 1) 오류 수정 항목이 있는 경우
+        if (!problemEvents.isEmpty()) {
+            sb.append(followUpIdx++).append(". **오류 수정 항목 점검**\n");
+            sb.append("   이번에 수정된 ").append(problemEvents.size())
+                    .append("건의 오류가 정상적으로 해결되었는지 확인하고, ")
+                    .append("동일한 문제가 재발하지 않는지 일정 기간 모니터링이 필요합니다.\n");
         }
-        for (ChangeEvent event : problemEvents) {
-            if ("HIGH".equals(event.getSeverity())) continue;
-            sb.append("- **").append(event.getTitle()).append("** — 동일 문제가 재발하지 않도록 관련 기능의 동작을 지속적으로 점검하여야 합니다.\n");
-            hasFollowUp = true;
+        // 2) 데이터 관리 항목 변경이 있는 경우
+        long schemaCount = featureEvents.stream()
+                .filter(e -> "SCHEMA_CHANGE".equals(e.getCategory())).count();
+        if (schemaCount > 0) {
+            sb.append(followUpIdx++).append(". **데이터 관리 항목 변경 확인**\n");
+            sb.append("   관리 항목이 변경된 부분이 있으므로, ")
+                    .append("기존에 입력된 데이터가 정상적으로 조회되는지 확인이 필요합니다.\n");
         }
-        for (ChangeEvent event : featureEvents) {
-            if ("HIGH".equals(event.getSeverity())) continue;
-            if ("SCHEMA_CHANGE".equals(event.getCategory())) {
-                sb.append("- **").append(event.getTitle()).append("** — 데이터 관리 구조가 변경되었으므로, 기존 데이터와의 정합성을 확인하여야 합니다.\n");
-                hasFollowUp = true;
-            } else if (containsAny(event.getTitle(), "삭제", "제거")) {
-                sb.append("- **").append(event.getTitle()).append("** — 기존 기능이 삭제되었으므로, 해당 기능을 사용하던 화면 및 관련 시스템의 영향 범위를 확인하여야 합니다.\n");
-                hasFollowUp = true;
-            } else if ("API_CHANGE".equals(event.getCategory())) {
-                sb.append("- **").append(event.getTitle()).append("** — 화면 또는 외부 시스템에서 사용하는 기능이 변경되었으므로, 연관된 화면의 정상 동작을 확인하여야 합니다.\n");
-                hasFollowUp = true;
-            }
+        // 3) 삭제된 기능이 있는 경우
+        long deletedCount = featureEvents.stream()
+                .filter(e -> containsAny(e.getTitle(), "삭제", "제거")).count();
+        if (deletedCount > 0) {
+            sb.append(followUpIdx++).append(". **삭제된 기능 영향 확인**\n");
+            sb.append("   일부 기능이 삭제되었으므로, ")
+                    .append("해당 기능을 사용하던 업무에 영향이 없는지 확인이 필요합니다.\n");
         }
-        if (!hasFollowUp) {
-            sb.append("- 이번 변경은 기존 기능에 대한 영향이 제한적이므로, 별도의 후속 조치가 필요하지 않습니다.\n");
+        // 4) 신규·변경 기능이 있는 경우
+        long newFeatureCount = featureEvents.stream()
+                .filter(e -> !containsAny(e.getTitle(), "삭제", "제거"))
+                .filter(e -> !"SCHEMA_CHANGE".equals(e.getCategory())).count();
+        if (newFeatureCount > 0) {
+            sb.append(followUpIdx++).append(". **신규 및 변경 기능 동작 확인**\n");
+            sb.append("   새로 추가되거나 변경된 기능이 화면에서 정상적으로 동작하는지 확인하시기 바랍니다.\n");
+        }
+        // 5) 중요도가 높은 변경이 있는 경우
+        if (!highEvents.isEmpty()) {
+            sb.append(followUpIdx++).append(". **주요 변경 사항 집중 점검**\n");
+            sb.append("   이번 변경 중 중요도가 높은 항목이 ").append(highEvents.size())
+                    .append("건 포함되어 있으므로, 해당 기능을 우선적으로 점검하시기 바랍니다.\n");
+        }
+        if (followUpIdx == 1) {
+            sb.append("이번 변경은 기존 기능에 미치는 영향이 제한적이므로, 별도의 후속 조치 없이 정상 운영이 가능합니다.\n");
         }
         return sb.toString();
     }
@@ -438,11 +461,89 @@ public class ReportGeneratorService {
     }
     /** 카테고리가 있으면 "카테고리: 항목" 형식으로 접두사를 붙여 추가합니다. */
     private void addWithCategory(List<String> result, String item, String category) {
-        if (category != null && !item.contains(": ")) {
-            result.add(category + ": " + item);
+        String sanitized = sanitizeForClient(item);
+        if (sanitized.isEmpty() || !sanitized.matches(".*[가-힣].*")) return;
+        if (category != null && !sanitized.contains(": ")) {
+            result.add(sanitizeForClient(category) + ": " + sanitized);
         } else {
-            result.add(item);
+            result.add(sanitized);
         }
+    }
+    /**
+     * 보고서 출력 텍스트에서 영문 기술 용어를 한국어로 치환합니다.
+     *
+     * <p>클라이언트가 이해할 수 없는 CRUD 동작명, 기술 패턴명 등을
+     * 한국어 업무 용어로 변환합니다.</p>
+     */
+    private String sanitizeForClient(String text) {
+        if (text == null || text.isBlank()) return "";
+        // 긴 복합어부터 매칭 (순서 중요)
+        String[][] terms = {
+                // 복합 용어
+                {"google sheet", "구글 시트"}, {"content block", "콘텐츠 블록"},
+                {"observation note", "관찰 메모"}, {"observation tag", "관찰 태그"},
+                {"dominant foot", "주발"}, {"secondary position", "보조 포지션"},
+                {"primary position", "주 포지션"}, {"team history", "팀 이력"},
+                {"scout candidate", "스카우트 후보"}, {"note priority", "메모 우선순위"},
+                {"access token", "접근 토큰"}, {"user role", "사용자 권한"},
+                // CRUD 동작
+                {"create", "생성"}, {"update", "수정"}, {"delete", "삭제"},
+                {"save", "저장"}, {"find", "조회"}, {"get", "조회"},
+                {"add", "추가"}, {"remove", "제거"}, {"edit", "수정"},
+                {"lookup", "조회"}, {"search", "검색"}, {"list", "목록"},
+                {"input", "입력"}, {"output", "출력"},
+                // 기획/업무 용어
+                {"plan", "계획"}, {"group", "그룹"}, {"slot", "배치"},
+                {"printable", "출력용"}, {"cleanup", "정리"},
+                {"extractor", "추출"}, {"whitelist", "허용 목록"},
+                {"range", "범위"}, {"data", "데이터"}, {"ref", "참조"},
+                {"avg", "평균"}, {"comparison", "비교"},
+                {"daily", "일별"}, {"monthly", "월별"},
+                {"personal", "개인"}, {"set", "설정"},
+                {"target", "대상"}, {"discovered", "발굴"},
+                {"physical", "체력"}, {"activity", "활동"},
+                {"alias", "별칭"}, {"period", "기간"},
+                {"questionnaire", "설문"}, {"dashboard", "현황판"},
+                {"rpe", "운동 강도"}, {"gps", "위치 추적"},
+                {"distance", "거리"}, {"wellness", "건강"},
+                {"feature", "기능"}, {"strength", "강점"},
+                {"weakness", "약점"}, {"scouting", "스카우팅"},
+                {"half", "하프"}, {"name", "명칭"},
+                // 도메인 용어
+                {"scout", "스카우트"}, {"player", "선수"}, {"team", "팀"},
+                {"match", "경기"}, {"league", "리그"}, {"season", "시즌"},
+                {"evaluation", "평가"}, {"observation", "관찰"},
+                {"candidate", "후보"}, {"position", "포지션"},
+                {"transfer", "이적"}, {"contract", "계약"},
+                {"salary", "급여"}, {"agent", "에이전트"},
+                {"schedule", "일정"}, {"event", "이벤트"},
+                {"note", "메모"}, {"tag", "태그"},
+                {"category", "카테고리"}, {"priority", "우선순위"},
+                {"report", "보고서"}, {"template", "양식"},
+                {"notification", "알림"}, {"message", "메시지"},
+                {"comment", "의견"}, {"user", "사용자"},
+                {"member", "회원"}, {"admin", "관리자"},
+                {"role", "역할"}, {"permission", "권한"},
+                {"profile", "프로필"}, {"setting", "설정"},
+                {"config", "설정"}, {"statistics", "통계"},
+                {"summary", "요약"}, {"history", "이력"},
+                {"record", "기록"}, {"status", "상태"},
+                {"type", "유형"}, {"level", "단계"},
+                {"detail", "상세"}, {"info", "정보"},
+                {"management", "관리"}, {"external", "외부"},
+                {"internal", "내부"}, {"preference", "환경설정"},
+                {"reference", "참조 정보"},
+                // 접속사
+                {"with", ""}, {"and", "및"},
+        };
+        String result = text;
+        for (String[] t : terms) {
+            String pattern = "(?i)\\b" + java.util.regex.Pattern.quote(t[0]) + "(?:ies|es|s)?\\b";
+            result = result.replaceAll(pattern, t[1]);
+        }
+        // 한글 뒤 남은 영어 복수형 접미사 제거
+        result = result.replaceAll("([가-힣])(ies|es|s)\\b", "$1");
+        return result.replaceAll("\\s+", " ").trim();
     }
     /**
      * 이벤트 목록에서 항목을 추출하고 유사 항목을 그룹핑하여
@@ -461,7 +562,10 @@ public class ReportGeneratorService {
         for (ChangeEvent event : events) {
             List<String> details = extractMeaningfulLines(event.getDescription(), 50);
             if (details.isEmpty()) {
-                items.add(event.getTitle());
+                String title = sanitizeForClient(event.getTitle());
+                if (!title.isEmpty() && title.matches(".*[가-힣].*")) {
+                    items.add(title);
+                }
             } else {
                 items.addAll(details);
             }
@@ -517,52 +621,14 @@ public class ReportGeneratorService {
         return new String[]{item, ""};
     }
     /**
-     * rawDraft(기능별 변경 상세 collapse 블록)를 "문제 해결 과정" 섹션 끝에 삽입합니다.
-     *
-     * <p>"### 결과" 섹션 시작 직전에 rawDraft를 삽입하여,
-     * "문제 해결 과정" 섹션의 마지막 부분에 기능별 상세가 포함되도록 합니다.</p>
-     */
-    private String injectRawDraftIntoSections(String sections, String rawDraft) {
-        if (rawDraft == null || rawDraft.isBlank()) {
-            return sections;
-        }
-        // "### 결과" 앞에 rawDraft 삽입 → "문제 해결 과정" 섹션 내에 위치
-        int resultIndex = sections.indexOf("### 결과");
-        if (resultIndex > 0) {
-            String before = sections.substring(0, resultIndex);
-            String after = sections.substring(resultIndex);
-            // "문제 해결 과정" 본문 뒤에 기능별 상세 추가
-            if (!before.endsWith("\n\n")) {
-                before = before.stripTrailing() + "\n\n";
-            }
-            return before + rawDraft.stripTrailing() + "\n\n" + after;
-        }
-        // "### 결과"를 찾지 못하면 섹션 끝에 추가
-        return sections.stripTrailing() + "\n\n" + rawDraft;
-    }
-
-    /**
-     * 카테고리 코드를 한국어 표시명으로 변환합니다.
+     * 카테고리 코드를 클라이언트가 이해할 수 있는 표시명으로 변환합니다.
      */
     private String formatCategoryName(String category) {
         return switch (category) {
-            case "SCHEMA_CHANGE" -> "DB 스키마";
-            case "API_CHANGE" -> "API";
-            case "CODE_CHANGE" -> "코드";
-            case "DEPENDENCY_CHANGE" -> "의존성";
-            default -> category;
-        };
-    }
-
-    /**
-     * 심각도 코드를 한국어 표시명으로 변환합니다.
-     */
-    private String formatSeverityName(String severity) {
-        return switch (severity) {
-            case "HIGH" -> "높음(HIGH)";
-            case "MEDIUM" -> "보통(MEDIUM)";
-            case "LOW" -> "낮음(LOW)";
-            default -> severity;
+            case "SCHEMA_CHANGE" -> "데이터 관리 항목 변경";
+            case "API_CHANGE" -> "화면 기능 변경";
+            case "DEPENDENCY_CHANGE" -> "외부 연동 변경";
+            default -> "기타";
         };
     }
 }

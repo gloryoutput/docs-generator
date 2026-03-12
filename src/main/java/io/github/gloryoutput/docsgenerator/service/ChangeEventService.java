@@ -553,7 +553,7 @@ public class ChangeEventService {
      */
     private String buildTitleFromDescription(String description, int commitCount) {
         if (description == null || description.isBlank()) {
-            return "프로젝트 코드 변경 (" + commitCount + "건 커밋)";
+            return "소프트웨어 변경 (" + commitCount + "건)";
         }
         // "- " 항목에서 한국어가 포함된 실제 변경 내용만 추출
         List<String> items = new ArrayList<>();
@@ -567,7 +567,7 @@ public class ChangeEventService {
             }
         }
         if (items.isEmpty()) {
-            return "프로젝트 코드 변경 (" + commitCount + "건 커밋)";
+            return "소프트웨어 변경 (" + commitCount + "건)";
         }
         // 최대 3개 항목만 표시, 초과 시 "등" 추가
         int displayCount = Math.min(items.size(), 3);
