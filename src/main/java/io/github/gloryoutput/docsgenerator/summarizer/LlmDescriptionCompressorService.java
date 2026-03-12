@@ -151,7 +151,8 @@ public class LlmDescriptionCompressorService {
      * 3) 메뉴 기준 그룹핑 (계층적 키워드를 상위 메뉴로 병합, 예: "scout/weather" → "scout")
      * 3.5) 의도 기반 압축 (같은 의도의 세부 항목을 통합, 예: 날씨/포지션/소속 필드 추가 → "영입후보 필드 추가")
      * 3.6) 미번역 카테고리 통합 (영문 키워드 그대로 남은 카테고리를 "기타 기능"으로 병합, 예: shape+afc → "기타 기능")
-     * 4) LLM이 있으면 의도 기반으로 사전 압축된 데이터로 추가 압축, 없으면 3.6단계 결과 반환</p>
+     * 3.8) 목적 단위 재그룹핑 (기능 단위 → 목적 단위, 예: 스카우트/선수/팀 → 신규 기능 추가/데이터 모델 확장)
+     * 4) LLM이 있으면 의도 기반으로 사전 압축된 데이터로 추가 압축, 없으면 3.8단계 결과 반환</p>
      *
      * @param changesByFeature 기능 영역 → 변경 설명 목록
      * @return 카테고리 → 압축된 변경 요약 목록
@@ -174,11 +175,13 @@ public class LlmDescriptionCompressorService {
         Map<String, List<String>> redistributed = redistributeOrphanCategories(intentCompressed);
         // 3.7단계: 주체 없는 제네릭 항목 제거 (메뉴명이 이미 맥락을 제공하므로 불필요)
         Map<String, List<String>> finalCompressed = removeGenericItems(redistributed);
+        // 3.8단계: 목적 단위 재그룹핑 (기능 단위 → 목적 단위)
+        Map<String, List<String>> purposeGrouped = regroupByPurpose(finalCompressed);
         if (llmClient == null) {
             int totalBefore = merged.values().stream().mapToInt(Set::size).sum();
-            int totalAfter = finalCompressed.values().stream().mapToInt(List::size).sum();
-            log.debug("LLM 비활성화 - 의도 기반 압축 적용 ({}건 → {}건)", totalBefore, totalAfter);
-            return finalCompressed;
+            int totalAfter = purposeGrouped.values().stream().mapToInt(List::size).sum();
+            log.debug("LLM 비활성화 - 목적 단위 압축 적용 ({}건 → {}건)", totalBefore, totalAfter);
+            return purposeGrouped;
         }
         // 4단계: LLM 추가 압축 (의도 기반으로 사전 압축된 데이터 전달)
         Map<String, Set<String>> menuMerged = groupByMenuSet(merged, childToParent);
@@ -194,16 +197,18 @@ public class LlmDescriptionCompressorService {
             savePromptFile(timestamp, "compress_output", result);
             Map<String, List<String>> compressed = parseResponse(result);
             if (compressed == null || compressed.isEmpty()) {
-                log.warn("LLM 압축 결과가 비어있음 - 의도 기반 압축 반환");
-                return finalCompressed;
+                log.warn("LLM 압축 결과가 비어있음 - 목적 단위 압축 반환");
+                return purposeGrouped;
             }
-            int compressedItems = compressed.values().stream().mapToInt(List::size).sum();
-            log.info("LLM 변경 설명 압축 완료 - {}개 메뉴 {}건 → {}개 카테고리 {}건",
-                    finalMergedForLlm.size(), totalItems, compressed.size(), compressedItems);
-            return compressed;
+            // LLM 결과도 목적 단위로 재그룹핑
+            Map<String, List<String>> llmPurposeGrouped = regroupByPurpose(compressed);
+            int compressedItems = llmPurposeGrouped.values().stream().mapToInt(List::size).sum();
+            log.info("LLM 변경 설명 압축 완료 - {}개 메뉴 {}건 → {}개 목적 {}건",
+                    finalMergedForLlm.size(), totalItems, llmPurposeGrouped.size(), compressedItems);
+            return llmPurposeGrouped;
         } catch (Exception e) {
-            log.warn("LLM 변경 설명 압축 실패 - 의도 기반 압축 반환. 원인: {}", e.getMessage());
-            return finalCompressed;
+            log.warn("LLM 변경 설명 압축 실패 - 목적 단위 압축 반환. 원인: {}", e.getMessage());
+            return purposeGrouped;
         }
     }
     /**
@@ -524,7 +529,7 @@ public class LlmDescriptionCompressorService {
                 if (bestPrefixLen > 0) {
                     sb.append(joinWords(baseWords, 0, bestPrefixLen)).append(" ");
                 }
-                sb.append(String.join(", ", diffParts));
+                sb.append(joinSubjects(diffParts));
                 sb.append(" ").append(joinWords(baseWords, baseWords.length - bestSuffixLen, baseWords.length));
                 result.add(sb.toString());
             }
@@ -533,11 +538,14 @@ public class LlmDescriptionCompressorService {
     }
     /** 같은 액션 접미사를 공유하는 항목들의 주어부를 쉼표로 병합합니다. */
     private static final String[] ACTION_SUFFIXES = {
+            // 사용자 친화적 접미사 (정규화 후 생성됨) - 긴 패턴 우선
+            "정보 관리 기능 추가", "정보 조회 기능 추가", "관리 항목 추가",
+            // 원본 접미사
             "관리 기능 신규 추가", "관리 기능 개선", "관리 기능 추가",
             "조회/생성 기능 추가", "조회 기능 추가", "삭제 기능 추가",
             "초기화 기능 추가", "동기화 기능 추가", "변환 기능 추가",
             "검증 기능 추가", "입력 기능 추가",
-            "기능 신규 추가", "기능 추가", "기능 개선", "기능 연동",
+            "기능 신규 추가", "기능 추가", "기능 개선", "시스템 연동", "기능 연동",
             "정보 관리 추가", "처리 기능 연동", "필드 추가", "관련 변경",
     };
     /**
@@ -572,12 +580,7 @@ public class LlmDescriptionCompressorService {
         List<String> result = new ArrayList<>();
         for (Map.Entry<String, List<String>> entry : bySuffix.entrySet()) {
             List<String> subjects = entry.getValue();
-            // 단일 항목이면 그대로, 2개 이상이면 쉼표 병합
-            if (subjects.size() == 1) {
-                result.add(subjects.get(0) + " " + entry.getKey());
-            } else {
-                result.add(String.join(", ", subjects) + " " + entry.getKey());
-            }
+            result.add(joinSubjects(subjects) + " " + entry.getKey());
         }
         result.addAll(unmatched);
         return result;
@@ -601,6 +604,16 @@ public class LlmDescriptionCompressorService {
             sb.append(words[i]);
         }
         return sb.toString();
+    }
+    /**
+     * 주어부 목록을 자연스러운 한국어로 연결합니다.
+     *
+     * <p>1개: "스카우트", 2개: "스카우트 및 선수", 3개 이상: "스카우트, 선수, 팀"</p>
+     */
+    private String joinSubjects(List<String> subjects) {
+        if (subjects.size() == 1) return subjects.get(0);
+        if (subjects.size() == 2) return subjects.get(0) + " 및 " + subjects.get(1);
+        return String.join(", ", subjects);
     }
     /**
      * 주체 없는 제네릭 액션 패턴 목록
@@ -696,6 +709,167 @@ public class LlmDescriptionCompressorService {
             {"관련 변경", "관련 변경"},
     };
     /**
+     * 목적 단위 분류 패턴 (긴 패턴 우선 매칭)
+     *
+     * <p>기능 단위로 정리된 항목을 목적 단위로 재분류합니다.
+     * 예: "스카우트 필드 추가" → "데이터 모델 확장",
+     * "날씨 조회 기능 추가" → "신규 기능 추가"</p>
+     */
+    private static final String[][] PURPOSE_CLASSIFIERS = {
+            // {매칭 키워드, 목적 카테고리} - 긴 패턴 우선
+            {"관리 항목 추가", "데이터 모델 확장"},
+            {"정보 관리 추가", "데이터 모델 확장"},
+            {"필드 추가", "데이터 모델 확장"},
+            {"정보 관리 기능 추가", "신규 기능 추가"},
+            {"정보 조회 기능 추가", "신규 기능 추가"},
+            {"관리 기능 신규 추가", "신규 기능 추가"},
+            {"관리 기능 추가", "신규 기능 추가"},
+            {"조회 기능 추가", "신규 기능 추가"},
+            {"삭제 기능 추가", "신규 기능 추가"},
+            {"입력 기능 추가", "신규 기능 추가"},
+            // 엔드유저가 몰라도 되는 시스템 내부 작업 → 기타 변경
+            {"초기화 기능 추가", "기타 변경"},
+            {"동기화 기능 추가", "기타 변경"},
+            {"변환 기능 추가", "기타 변경"},
+            {"검증 기능 추가", "기타 변경"},
+            {"기능 신규 추가", "신규 기능 추가"},
+            {"기능 추가 및 개선", "신규 기능 추가"},
+            {"기능 추가", "신규 기능 추가"},
+            {"관리 기능 개선", "기능 개선"},
+            {"기능 개선", "기능 개선"},
+            {"시스템 연동", "외부 연동"},
+            {"처리 기능 연동", "외부 연동"},
+            {"기능 연동", "외부 연동"},
+            {"관련 변경", "기타 변경"},
+    };
+    /**
+     * 목적 그룹 내 액션 접미사 정규화 맵 (사용자 친화적 어휘로 변환)
+     *
+     * <p>기술 용어를 비개발자가 이해할 수 있는 표현으로 변환하고,
+     * 미세하게 다른 액션 접미사를 통일하여 후속 병합이 가능하도록 합니다.
+     * 예: "스카우트 필드 추가" → "스카우트 관리 항목 추가",
+     * "스카우트 관리 기능 신규 추가" → "스카우트 정보 관리 기능 추가"</p>
+     */
+    private static final String[][] ACTION_SUFFIX_NORMALIZATIONS = {
+            // {원본 접미사, 정규화된 접미사} - 긴 패턴 우선
+            {"관리 기능 신규 추가", "정보 관리 기능 추가"},
+            {"관리 기능 추가", "정보 관리 기능 추가"},
+            {"조회 기능 추가", "정보 조회 기능 추가"},
+            {"기능 신규 추가", "기능 추가"},
+            {"기능 추가 및 개선", "기능 추가"},
+            {"정보 관리 추가", "관리 항목 추가"},
+            {"필드 추가", "관리 항목 추가"},
+    };
+    /**
+     * 기능 단위 카테고리를 목적 단위로 재그룹핑합니다.
+     *
+     * <p>기능별로 분류된 항목(스카우트, 선수, 팀 등)을
+     * 목적별(신규 기능 추가, 데이터 모델 확장, 기능 개선 등)로 재분류합니다.
+     * 각 항목에는 이미 기능 맥락(스카우트 필드 추가 등)이 포함되어 있으므로
+     * 목적 카테고리로 이동해도 의미가 유지됩니다.</p>
+     *
+     * <p>예:
+     * Before: {스카우트: [스카우트 필드 추가, 날씨 조회 기능 추가], 선수: [선수 필드 추가]}
+     * After: {데이터 모델 확장: [스카우트 필드 추가, 선수 필드 추가], 신규 기능 추가: [날씨 조회 기능 추가]}</p>
+     */
+    private Map<String, List<String>> regroupByPurpose(Map<String, List<String>> featureGrouped) {
+        Map<String, List<String>> purposeGroups = new LinkedHashMap<>();
+        for (Map.Entry<String, List<String>> entry : featureGrouped.entrySet()) {
+            for (String item : entry.getValue()) {
+                String purpose = classifyPurpose(item);
+                purposeGroups.computeIfAbsent(purpose, k -> new ArrayList<>()).add(item);
+            }
+        }
+        int totalBefore = purposeGroups.values().stream().mapToInt(List::size).sum();
+        // 각 목적 그룹 내: 액션 접미사 정규화 → 중복 제거 → 유사 항목 병합 → 접미사 병합
+        for (Map.Entry<String, List<String>> entry : purposeGroups.entrySet()) {
+            List<String> items = normalizeActionSuffixes(entry.getValue());
+            items = deduplicateItems(items);
+            items = mergeSimilarItems(items);
+            items = mergeByActionSuffix(items);
+            entry.setValue(items);
+        }
+        // "신규 기능 추가"에서 엔드유저가 몰라도 되는 시스템 내부 항목 걸러내기
+        List<String> newFeatures = purposeGroups.get("신규 기능 추가");
+        if (newFeatures != null) {
+            List<String> internal = new ArrayList<>();
+            newFeatures.removeIf(item -> {
+                if (isInternalItem(item)) {
+                    internal.add(item);
+                    return true;
+                }
+                return false;
+            });
+            if (!internal.isEmpty()) {
+                purposeGroups.computeIfAbsent("기타 변경", k -> new ArrayList<>()).addAll(internal);
+                log.debug("신규 기능 추가에서 시스템 내부 항목 {}건 → 기타 변경으로 이동", internal.size());
+            }
+        }
+        // 빈 카테고리 제거
+        purposeGroups.entrySet().removeIf(e -> e.getValue().isEmpty());
+        int totalAfter = purposeGroups.values().stream().mapToInt(List::size).sum();
+        if (totalBefore != totalAfter) {
+            log.debug("목적 단위 재그룹핑: {}건 → {}건 ({}개 목적 카테고리)",
+                    totalBefore, totalAfter, purposeGroups.size());
+        }
+        return purposeGroups;
+    }
+    /**
+     * 엔드유저가 몰라도 되는 시스템 내부 작업 키워드
+     *
+     * <p>이 키워드가 포함된 항목은 "신규 기능 추가"에서 제외됩니다.
+     * 초기화, 동기화, 변환, 검증 등은 시스템 내부에서 이루어지는 작업으로
+     * 사용자가 직접 사용하는 기능이 아닙니다.</p>
+     */
+    private static final Set<String> INTERNAL_KEYWORDS = Set.of(
+            "초기화", "동기화", "변환", "검증", "배치", "마이그레이션", "캐시", "인덱스", "로깅"
+    );
+    /**
+     * 항목이 시스템 내부 작업인지 판별합니다.
+     */
+    private boolean isInternalItem(String item) {
+        for (String keyword : INTERNAL_KEYWORDS) {
+            if (item.contains(keyword)) return true;
+        }
+        return false;
+    }
+    /**
+     * 항목들의 액션 접미사를 정규화합니다.
+     *
+     * <p>같은 목적 그룹 내에서 미세하게 다른 액션 접미사를 통일하여
+     * 후속 mergeByActionSuffix에서 주어부 병합이 가능하도록 합니다.
+     * 예: "스카우트 관리 기능 신규 추가" → "스카우트 관리 기능 추가"</p>
+     */
+    private List<String> normalizeActionSuffixes(List<String> items) {
+        List<String> normalized = new ArrayList<>(items.size());
+        for (String item : items) {
+            String result = item;
+            for (String[] norm : ACTION_SUFFIX_NORMALIZATIONS) {
+                // 이중 정규화 방지: 이미 목표 접미사로 끝나면 건너뜀
+                if (item.endsWith(norm[0]) && !item.endsWith(norm[1])) {
+                    result = item.substring(0, item.length() - norm[0].length()) + norm[1];
+                    break;
+                }
+            }
+            normalized.add(result);
+        }
+        return normalized;
+    }
+    /**
+     * 항목의 목적을 분류합니다.
+     *
+     * @param item 분류 대상 항목
+     * @return 목적 카테고리명
+     */
+    private String classifyPurpose(String item) {
+        for (String[] classifier : PURPOSE_CLASSIFIERS) {
+            if (item.contains(classifier[0])) {
+                return classifier[1];
+            }
+        }
+        return "기타 변경";
+    }
+    /**
      * 메뉴 그룹 내 항목들을 의도 기반으로 압축합니다.
      *
      * <p>같은 메뉴 그룹 내에서 동일한 의도(필드 추가, 기능 추가 등)로 분류되는
@@ -742,14 +916,29 @@ public class LlmDescriptionCompressorService {
         return result;
     }
     /**
+     * 의도 라벨 → 사용자 친화적 라벨 변환 맵
+     *
+     * <p>의도 기반 압축 시 기술적 의도 라벨을 비개발자가 이해할 수 있는
+     * 표현으로 변환합니다.
+     * 예: "필드 추가" → "관리 항목 추가", "관리 기능 추가" → "정보 관리 기능 추가"</p>
+     */
+    private static final Map<String, String> FRIENDLY_INTENT_LABELS = Map.of(
+            "필드 추가", "관리 항목 추가",
+            "관리 기능 신규 추가", "정보 관리 기능 추가",
+            "관리 기능 추가", "정보 관리 기능 추가",
+            "조회 기능 추가", "정보 조회 기능 추가",
+            "기능 추가", "관련 기능 추가",
+            "기능 연동", "시스템 연동"
+    );
+    /**
      * 단일 메뉴 그룹의 항목들을 의도별로 분류하여 압축합니다.
      *
      * <p>각 항목을 의도 유형(필드 추가, 기능 추가, 기능 개선 등)으로 분류합니다.
-     * 같은 의도로 분류된 2개 이상의 항목은 "{menu} {의도}" 형태의
+     * 같은 의도로 분류된 2개 이상의 항목은 "{menu} {사용자 친화적 의도}" 형태의
      * 단일 문장으로 통합됩니다. 단일 항목은 원본을 유지합니다.</p>
      *
      * <p>예: "날씨 정보 관리 추가", "보조 포지션 정보 관리 추가", "소속 필드 추가"
-     * → "scout 필드 추가" (3개 모두 "필드 추가" 의도로 분류)</p>
+     * → "scout 관리 항목 추가" (3개 모두 "필드 추가" 의도 → "관리 항목 추가"로 변환)</p>
      */
     private List<String> buildIntentSummary(String menu, List<String> items) {
         Map<String, List<String>> intentGroups = new LinkedHashMap<>();
@@ -765,8 +954,10 @@ public class LlmDescriptionCompressorService {
         List<String> result = new ArrayList<>();
         for (Map.Entry<String, List<String>> group : intentGroups.entrySet()) {
             if (group.getValue().size() >= 2) {
-                // 2개 이상이면 의도 문장으로 통합
-                result.add(menu + " " + group.getKey());
+                // 2개 이상이면 사용자 친화적 의도 문장으로 통합
+                String friendlyLabel = FRIENDLY_INTENT_LABELS.getOrDefault(
+                        group.getKey(), group.getKey());
+                result.add(menu + " " + friendlyLabel);
             } else {
                 result.addAll(group.getValue());
             }

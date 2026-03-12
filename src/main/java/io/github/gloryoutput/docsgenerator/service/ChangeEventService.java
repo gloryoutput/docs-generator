@@ -498,7 +498,7 @@ public class ChangeEventService {
             if (!allValidCommits.isEmpty()) {
                 String mergedRepoName = String.join(", ", repoNames);
                 String description = buildRepoDescription(mergedRepoName, allValidCommits);
-                String title = "프로젝트 코드 변경 (" + allValidCommits.size() + "건 커밋)";
+                String title = buildTitleFromDescription(description, allValidCommits.size());
                 events.add(ChangeEvent.builder()
                         .idAnalysisRequest(idAnalysisRequest)
                         .idProject(idProject)
@@ -521,7 +521,7 @@ public class ChangeEventService {
                         .toList();
                 if (validCommits.isEmpty()) continue;
                 String description = buildRepoDescription(repoName, validCommits);
-                String title = buildRepoTitle(repoName, validCommits);
+                String title = buildTitleFromDescription(description, validCommits.size());
                 events.add(ChangeEvent.builder()
                         .idAnalysisRequest(idAnalysisRequest)
                         .idProject(idProject)
@@ -545,6 +545,41 @@ public class ChangeEventService {
             return commits.get(0).getMessage();
         }
         return repoName + " 코드 변경 (" + commits.size() + "건 커밋)";
+    }
+    /**
+     * description에서 기능별 변경 카테고리를 추출하여 구체적인 제목을 생성합니다.
+     *
+     * <p>"기능별 변경 내용:" 아래의 [카테고리] 헤더에서 주요 변경 영역을 파악하고,
+     * 이를 조합하여 "스카우트 관리, 선수 평가 등 기능 변경" 형태의 제목을 만듭니다.
+     * 카테고리를 추출할 수 없으면 기존 방식의 제목을 반환합니다.</p>
+     */
+    private String buildTitleFromDescription(String description, int commitCount) {
+        if (description == null || description.isBlank()) {
+            return "프로젝트 코드 변경 (" + commitCount + "건 커밋)";
+        }
+        // "기능별 변경 내용:" 아래의 [카테고리] 라인에서 카테고리명 추출
+        List<String> categories = new ArrayList<>();
+        boolean inFeatureSection = false;
+        for (String line : description.split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.equals("기능별 변경 내용:")) {
+                inFeatureSection = true;
+                continue;
+            }
+            if (inFeatureSection && trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                categories.add(trimmed.substring(1, trimmed.length() - 1));
+            }
+        }
+        if (categories.isEmpty()) {
+            return "프로젝트 코드 변경 (" + commitCount + "건 커밋)";
+        }
+        // 최대 3개 카테고리만 표시, 초과 시 "등" 추가
+        int displayCount = Math.min(categories.size(), 3);
+        String categoryText = String.join(", ", categories.subList(0, displayCount));
+        if (categories.size() > displayCount) {
+            categoryText += " 등";
+        }
+        return categoryText + " 기능 변경";
     }
     /**
      * 레포지토리의 전체 커밋을 통합하여 기능 변경 중심의 description을 생성합니다.

@@ -133,93 +133,150 @@ public class ReportGeneratorService {
     /**
      * LLM 호출 실패 시 이벤트 데이터로부터 6개 섹션 fallback 콘텐츠를 생성합니다.
      *
-     * <p>원본 보고서(고영 오류 수정 완료 보고서) 형식에 맞추어
-     * 목적, 발생한 문제, 문제 원인, 문제 해결 과정, 결과, 개선 및 예방 방안
-     * 6개 섹션을 ### 제목으로 구분하여 생성합니다.</p>
+     * <p>이벤트를 문제(오류/버그 수정)와 변경(신규 개발/기능 개선)으로 분류하여
+     * 각 섹션의 성격에 맞는 내용을 배치합니다.
+     * - 목적/결과: 문제 수정과 기능 변경을 모두 포함
+     * - 발생한 문제/문제 원인: 실제 문제(오류/버그)만 기술
+     * - 문제 해결 과정: 문제 수정과 기능 개발 과정을 구분하여 서술</p>
      */
     private String buildFallbackSections(String projectName, String startDate, String endDate,
                                           List<CorrelatedGroup> groups,
                                           Map<String, Integer> categoryCount,
                                           Map<String, Integer> severityCount) {
         log.info("LLM 미사용 - fallback 6개 섹션 생성 (프로젝트: {})", projectName);
-        // 전체 이벤트를 단일 리스트로 수집
+        // 전체 이벤트 수집 및 분류 (문제 vs 변경)
         List<ChangeEvent> allEvents = new ArrayList<>();
         List<ChangeEvent> highEvents = new ArrayList<>();
+        List<ChangeEvent> problemEvents = new ArrayList<>();
+        List<ChangeEvent> featureEvents = new ArrayList<>();
         for (CorrelatedGroup group : groups) {
             if (group.getEvents() == null) continue;
             for (ChangeEvent event : group.getEvents()) {
                 allEvents.add(event);
                 if ("HIGH".equals(event.getSeverity())) highEvents.add(event);
+                if (isProblemEvent(event)) {
+                    problemEvents.add(event);
+                } else {
+                    featureEvents.add(event);
+                }
             }
         }
         StringBuilder sb = new StringBuilder();
-        // ### 목적
+        // ### 목적: 전체 변경 개요 (문제 수정 + 기능 변경 모두 포함)
         sb.append("### 목적\n\n");
         sb.append("본 보고서는 ").append(projectName).append(" 프로젝트에서 ")
                 .append(startDate).append(" ~ ").append(endDate)
-                .append(" 기간 동안 수행된 소프트웨어 변경 작업에 대한 보고서입니다. ")
-                .append("해당 기간에 총 ").append(allEvents.size()).append("건의 변경이 이루어졌으며, ");
-        // 카테고리별 요약을 목적에 포함
-        if (!categoryCount.isEmpty()) {
-            List<String> catDescriptions = new ArrayList<>();
-            categoryCount.forEach((k, v) -> catDescriptions.add(formatCategoryName(k) + " 변경 " + v + "건"));
-            sb.append(String.join(", ", catDescriptions)).append("이 포함되어 있습니다. ");
+                .append(" 기간 동안 수행된 소프트웨어 변경 작업을 정리한 보고서입니다.\n\n");
+        // 유형별 건수 요약
+        if (!problemEvents.isEmpty() && !featureEvents.isEmpty()) {
+            sb.append("해당 기간에 총 ").append(allEvents.size()).append("건의 변경이 이루어졌으며, ")
+                    .append("오류 수정 ").append(problemEvents.size()).append("건과 ")
+                    .append("신규 개발 및 기능 개선 ").append(featureEvents.size()).append("건이 포함되어 있습니다.\n\n");
+        } else if (!problemEvents.isEmpty()) {
+            sb.append("해당 기간에 총 ").append(problemEvents.size()).append("건의 오류 수정이 진행되었습니다.\n\n");
+        } else {
+            sb.append("해당 기간에 총 ").append(featureEvents.size())
+                    .append("건의 신규 개발 및 기능 개선이 진행되었습니다.\n\n");
         }
-        sb.append("각 변경의 배경, 진행 과정, 결과 및 후속 조치 사항을 정리하였습니다.\n\n");
-        // ### 발생한 문제
-        sb.append("### 발생한 문제\n\n");
-        sb.append("아래 항목들에 대해 신규 개발 또는 기존 기능 개선이 필요하였습니다.\n\n");
+        sb.append("주요 변경 내용은 다음과 같습니다.\n\n");
         for (ChangeEvent event : allEvents) {
-            sb.append("- **").append(event.getTitle()).append("**: ");
-            String problemLine = extractFirstMeaningfulLine(event.getDescription());
-            if (problemLine != null) {
-                sb.append(problemLine);
-            } else {
-                sb.append("해당 기능에 대한 신규 구현 또는 기존 동작 방식의 개선이 요구되었습니다");
+            sb.append("- ").append(event.getTitle());
+            String detail = extractFirstMeaningfulLine(event.getDescription());
+            if (detail != null) {
+                sb.append(": ").append(detail);
             }
             sb.append("\n");
         }
         sb.append("\n");
-        // ### 문제 원인
-        sb.append("### 문제 원인\n\n");
-        sb.append("위 변경 사항들은 다음과 같은 업무상의 요구사항 및 기술적 필요에 의해 진행되었습니다.\n\n");
-        for (ChangeEvent event : allEvents) {
-            sb.append("- **").append(event.getTitle()).append("**\n");
-            List<String> causeLines = extractMeaningfulLines(
-                    event.getDescription() != null ? event.getDescription() : "", 3);
-            if (!causeLines.isEmpty()) {
-                for (String line : causeLines) {
-                    sb.append("  - ").append(line).append("\n");
-                }
-            } else {
-                sb.append("  - 해당 기능이 기존 시스템에 존재하지 않거나, 현재 구현이 업무 요건에 부합하지 않아 변경이 필요하였습니다.\n");
+        // ### 발생한 문제: 실제 오류/버그만 기술, "어떤 기능에서 어떤 문제" 형식
+        sb.append("### 발생한 문제\n\n");
+        if (problemEvents.isEmpty()) {
+            sb.append("해당 기간에 보고된 시스템 오류 또는 장애는 없으며, ")
+                    .append("신규 기능 개발 및 기존 기능 개선 위주로 작업이 진행되었습니다.\n\n");
+        } else {
+            sb.append("해당 기간에 다음과 같은 문제가 확인되어 수정이 필요하였습니다.\n\n");
+            for (ChangeEvent event : problemEvents) {
+                sb.append("- **").append(event.getTitle()).append("**: ");
+                sb.append(buildProblemStatement(event));
+                sb.append("\n");
             }
+            sb.append("\n");
         }
-        sb.append("\n");
-        // ### 문제 해결 과정
-        sb.append("### 문제 해결 과정\n\n");
-        sb.append("위 문제를 해결하기 위해 다음과 같은 단계로 작업을 수행하였습니다.\n\n");
-        int stepIndex = 1;
-        for (CorrelatedGroup group : groups) {
-            if (group.getEvents() == null || group.getEvents().isEmpty()) continue;
-            sb.append(stepIndex++).append(". **").append(group.getTitle()).append("**\n");
-            for (ChangeEvent event : group.getEvents()) {
-                List<String> lines = extractMeaningfulLines(
+        // ### 문제 원인: 실제 문제의 원인만, 기능 맥락 포함
+        sb.append("### 문제 원인\n\n");
+        if (problemEvents.isEmpty()) {
+            sb.append("해당 기간에 오류 수정 사항이 없으므로 본 항목은 해당되지 않습니다.\n\n");
+        } else {
+            sb.append("위 문제들의 원인은 다음과 같이 분석되었습니다.\n\n");
+            for (ChangeEvent event : problemEvents) {
+                sb.append("- **").append(event.getTitle()).append("**\n");
+                List<String> causeLines = extractMeaningfulLines(
                         event.getDescription() != null ? event.getDescription() : "", 3);
-                if (!lines.isEmpty()) {
-                    for (String line : lines) {
-                        sb.append("   - ").append(line).append("\n");
+                if (!causeLines.isEmpty()) {
+                    for (String line : causeLines) {
+                        sb.append("  - ").append(line).append("\n");
                     }
                 } else {
-                    sb.append("   - ").append(event.getTitle()).append(" 작업을 수행하였습니다.\n");
+                    String title = event.getTitle() != null ? event.getTitle() : "";
+                    String feature = extractFeatureName(title);
+                    // 제목 키워드 기반으로 구체적 원인 도출
+                    if (containsAny(title, "조회", "표시", "출력")) {
+                        sb.append("  - ").append(feature).append(" 데이터 조회 로직의 결함\n");
+                    } else if (containsAny(title, "저장", "등록", "입력")) {
+                        sb.append("  - ").append(feature).append(" 데이터 저장 처리의 결함\n");
+                    } else if (containsAny(title, "삭제", "제거")) {
+                        sb.append("  - ").append(feature).append(" 삭제 처리의 결함\n");
+                    } else if (containsAny(title, "연동", "동기화")) {
+                        sb.append("  - ").append(feature).append(" 데이터 연동 처리의 결함\n");
+                    } else if (containsAny(title, "계산", "산출", "집계")) {
+                        sb.append("  - ").append(feature).append(" 계산 로직의 결함\n");
+                    } else {
+                        sb.append("  - ").append(feature).append(" 처리 로직의 결함\n");
+                    }
                 }
             }
+            sb.append("\n");
         }
-        sb.append("\n");
-        // ### 결과
+        // ### 문제 해결 과정: 문제 수정과 기능 개발을 구분하여 서술
+        sb.append("### 문제 해결 과정\n\n");
+        if (!problemEvents.isEmpty()) {
+            sb.append("#### 오류 수정\n\n");
+            sb.append("확인된 문제를 해결하기 위해 다음과 같이 조치하였습니다.\n\n");
+            for (ChangeEvent event : problemEvents) {
+                sb.append("- **").append(event.getTitle()).append("**: ");
+                sb.append(buildEventDescription(event, true));
+                sb.append("\n");
+            }
+            sb.append("\n");
+        }
+        if (!featureEvents.isEmpty()) {
+            if (!problemEvents.isEmpty()) {
+                sb.append("#### 기능 개발 및 개선\n\n");
+            }
+            Map<String, List<ChangeEvent>> eventsByPurpose = groupEventsByPurpose(featureEvents);
+            sb.append("업무 요건을 반영하기 위해 다음과 같은 작업을 수행하였습니다.\n\n");
+            int stepIndex = 1;
+            for (Map.Entry<String, List<ChangeEvent>> purposeEntry : eventsByPurpose.entrySet()) {
+                String purpose = purposeEntry.getKey();
+                List<ChangeEvent> events = purposeEntry.getValue();
+                sb.append(stepIndex++).append(". **").append(purpose).append("**\n");
+                sb.append("   ").append(buildPurposeStatement(purpose)).append("\n");
+                for (ChangeEvent event : events) {
+                    sb.append("   - **").append(event.getTitle()).append("**: ");
+                    sb.append(buildEventDescription(event, false));
+                    sb.append("\n");
+                }
+            }
+            sb.append("\n");
+        }
+        // ### 결과: 문제 수정과 기능 변경을 구분하여 완료 상태 기술
         sb.append("### 결과\n\n");
         sb.append("상기 작업을 통해 다음과 같은 변경이 완료되었습니다.\n\n");
-        for (ChangeEvent event : allEvents) {
+        for (ChangeEvent event : problemEvents) {
+            sb.append("- **").append(event.getTitle()).append("** — ");
+            sb.append("오류 수정 완료, 정상 동작 확인\n");
+        }
+        for (ChangeEvent event : featureEvents) {
             sb.append("- **").append(event.getTitle()).append("** — ");
             String resultDetail = extractFirstMeaningfulLine(event.getDescription());
             if (resultDetail != null) {
@@ -235,19 +292,24 @@ public class ReportGeneratorService {
         sb.append("이번 변경과 관련하여 다음 사항에 대한 후속 점검이 필요합니다.\n\n");
         boolean hasFollowUp = false;
         for (ChangeEvent event : highEvents) {
-            sb.append("- **").append(event.getTitle()).append("** — 심각도가 높은 변경으로, 배포 후 해당 기능의 정상 동작 여부를 반드시 확인하여야 합니다.\n");
+            sb.append("- **").append(event.getTitle()).append("** — 중요도가 높은 변경으로, 배포 후 해당 기능의 정상 동작 여부를 반드시 확인하여야 합니다.\n");
             hasFollowUp = true;
         }
-        for (ChangeEvent event : allEvents) {
+        for (ChangeEvent event : problemEvents) {
+            if ("HIGH".equals(event.getSeverity())) continue;
+            sb.append("- **").append(event.getTitle()).append("** — 동일 문제가 재발하지 않도록 관련 기능의 동작을 지속적으로 점검하여야 합니다.\n");
+            hasFollowUp = true;
+        }
+        for (ChangeEvent event : featureEvents) {
             if ("HIGH".equals(event.getSeverity())) continue;
             if ("SCHEMA_CHANGE".equals(event.getCategory())) {
-                sb.append("- **").append(event.getTitle()).append("** — 데이터베이스 스키마가 변경되었으므로, 기존 데이터의 정합성 및 관련 쿼리·인덱스의 정상 동작을 확인하여야 합니다.\n");
+                sb.append("- **").append(event.getTitle()).append("** — 데이터 관리 구조가 변경되었으므로, 기존 데이터와의 정합성을 확인하여야 합니다.\n");
                 hasFollowUp = true;
             } else if (containsAny(event.getTitle(), "삭제", "제거")) {
-                sb.append("- **").append(event.getTitle()).append("** — 기존 기능이 삭제 또는 제거되었으므로, 해당 기능을 사용하던 외부 시스템 및 화면의 영향 범위를 확인하여야 합니다.\n");
+                sb.append("- **").append(event.getTitle()).append("** — 기존 기능이 삭제되었으므로, 해당 기능을 사용하던 화면 및 관련 시스템의 영향 범위를 확인하여야 합니다.\n");
                 hasFollowUp = true;
             } else if ("API_CHANGE".equals(event.getCategory())) {
-                sb.append("- **").append(event.getTitle()).append("** — API가 변경되었으므로, 해당 API를 호출하는 클라이언트의 호환성을 확인하여야 합니다.\n");
+                sb.append("- **").append(event.getTitle()).append("** — 화면 또는 외부 시스템에서 사용하는 기능이 변경되었으므로, 연관된 화면의 정상 동작을 확인하여야 합니다.\n");
                 hasFollowUp = true;
             }
         }
@@ -255,6 +317,167 @@ public class ReportGeneratorService {
             sb.append("- 이번 변경은 기존 기능에 대한 영향이 제한적이므로, 별도의 후속 조치가 필요하지 않습니다.\n");
         }
         return sb.toString();
+    }
+    /**
+     * 이벤트가 문제(오류/버그 수정)인지 판별합니다.
+     *
+     * <p>이벤트의 title과 description에서 오류/버그 관련 키워드를 탐지합니다.
+     * 신규 개발이나 기능 개선과 구분하여 보고서의 "발생한 문제" 섹션에
+     * 실제 문제만 기술하기 위해 사용합니다.</p>
+     */
+    private boolean isProblemEvent(ChangeEvent event) {
+        String title = event.getTitle() != null ? event.getTitle() : "";
+        String desc = event.getDescription() != null ? event.getDescription() : "";
+        String combined = title + " " + desc;
+        return containsAny(combined,
+                "오류", "에러", "버그", "장애", "결함", "누락", "잘못",
+                "실패", "충돌", "복구", "수정", "fix", "bug", "error");
+    }
+    /**
+     * 이벤트 제목에서 기능명을 추출합니다.
+     *
+     * <p>오류/수정 관련 키워드를 제거하고 기능 대상만 남겨서
+     * "어떤 기능에서 문제가 발생했는지" 서술할 수 있도록 합니다.
+     * 예: "스카우트 일정 날씨 조회 오류 수정" → "스카우트 일정 날씨 조회"</p>
+     */
+    private String extractFeatureName(String title) {
+        if (title == null || title.isBlank()) return "해당";
+        String cleaned = title
+                .replaceAll("(오류|에러|버그|장애|결함|수정|누락|잘못|실패|충돌|복구|fix|bug|error)", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+        return cleaned.isEmpty() ? "해당" : cleaned;
+    }
+    /**
+     * 문제 이벤트에 대해 간결한 문제 현상을 서술합니다.
+     *
+     * <p>description이 있으면 실제 분석된 내용을 사용하고,
+     * 없으면 제목에서 기능명과 문제 유형을 직접 도출하여 간결하게 기술합니다.
+     * 예: "스카우트 일정 날씨 조회 오류 수정" → "스카우트 일정 날씨 조회 시 오류 발생"</p>
+     */
+    private String buildProblemStatement(ChangeEvent event) {
+        String descLine = extractFirstMeaningfulLine(event.getDescription());
+        if (descLine != null) return descLine;
+        // description이 없을 때: 제목에서 직접 문제 내용 도출 (간결하게)
+        String title = event.getTitle() != null ? event.getTitle() : "";
+        String feature = extractFeatureName(title);
+        // 제목에서 문제 유형 키워드를 감지하여 간결한 현상 기술
+        if (containsAny(title, "오류", "에러", "error")) return feature + " 시 오류 발생";
+        if (containsAny(title, "누락")) return feature + " 데이터 누락";
+        if (containsAny(title, "실패")) return feature + " 처리 실패";
+        if (containsAny(title, "충돌")) return feature + " 시 충돌 발생";
+        if (containsAny(title, "장애")) return feature + " 장애 발생";
+        return feature + " 오류 발생";
+    }
+    /**
+     * 목적 카테고리에 대한 작업 설명 도입 문장을 생성합니다.
+     *
+     * <p>비개발자가 이해할 수 있는 업무 관점의 서술로, 해당 목적 그룹에서
+     * 어떤 종류의 작업이 수행되었는지 안내합니다.</p>
+     */
+    private String buildPurposeStatement(String purpose) {
+        return switch (purpose) {
+            case "데이터 모델 확장" ->
+                    "업무에 필요한 데이터 관리 항목을 추가하거나 구조를 변경하였습니다.";
+            case "신규 기능 추가" ->
+                    "업무 요건에 따라 다음과 같은 신규 기능을 개발하였습니다.";
+            case "기능 개선" ->
+                    "기존 기능의 사용성 및 동작 방식을 개선하였습니다.";
+            case "외부 연동" ->
+                    "외부 시스템과의 데이터 연동을 구현하였습니다.";
+            default ->
+                    "다음과 같은 변경 작업을 수행하였습니다.";
+        };
+    }
+    /**
+     * 개별 이벤트에 대한 비개발자 친화적 설명을 생성합니다.
+     *
+     * <p>문제 이벤트는 수정 조치 관점에서, 기능 이벤트는 개발 내용 관점에서 서술합니다.
+     * 기술 용어(Repository, Service, Controller, Entity 등)를 사용하지 않고
+     * 업무 관점에서 이해할 수 있는 표현을 사용합니다.</p>
+     *
+     * @param event 대상 이벤트
+     * @param isProblem true면 문제 수정 관점, false면 기능 개발 관점으로 서술
+     */
+    private String buildEventDescription(ChangeEvent event, boolean isProblem) {
+        String title = event.getTitle() != null ? event.getTitle() : "";
+        String descLine = extractFirstMeaningfulLine(event.getDescription());
+        if (descLine != null) return descLine;
+        if (isProblem) {
+            String feature = extractFeatureName(title);
+            return "원인 파악 후 " + feature + " 정상 동작하도록 수정 완료";
+        }
+        // 기능 변경: category와 title 기반 설명
+        String category = event.getCategory();
+        if ("SCHEMA_CHANGE".equals(category)) {
+            if (containsAny(title, "추가", "신규", "생성")) {
+                return "업무에 필요한 데이터 관리 항목을 새로 추가하였습니다.";
+            }
+            if (containsAny(title, "수정", "변경")) {
+                return "업무 요건에 맞게 데이터 관리 구조를 변경하였습니다.";
+            }
+            if (containsAny(title, "삭제", "제거")) {
+                return "더 이상 사용하지 않는 데이터 항목을 정리하였습니다.";
+            }
+            return "데이터 관리 구조를 업무 요건에 맞게 변경하였습니다.";
+        }
+        if ("API_CHANGE".equals(category)) {
+            if (containsAny(title, "추가", "신규")) {
+                return "새로운 기능을 사용할 수 있도록 개발하였습니다.";
+            }
+            if (containsAny(title, "삭제", "제거")) {
+                return "더 이상 사용하지 않는 기능을 제거하였습니다.";
+            }
+            return "기존 기능의 동작 방식을 업무 요건에 맞게 변경하였습니다.";
+        }
+        if (containsAny(title, "연동", "통합")) {
+            return "외부 시스템과 데이터를 주고받을 수 있도록 연동하였습니다.";
+        }
+        if (containsAny(title, "개선", "리팩토링")) {
+            return "기존 기능의 동작 방식을 개선하였습니다.";
+        }
+        return "업무 요건에 따라 해당 기능을 개발하였습니다.";
+    }
+    /**
+     * 이벤트를 목적 카테고리별로 그룹핑합니다.
+     *
+     * <p>이벤트의 category와 title을 분석하여 목적 단위(데이터 모델 확장,
+     * 신규 기능 추가, 기능 개선, 외부 연동, 기타 변경)로 분류합니다.</p>
+     */
+    private Map<String, List<ChangeEvent>> groupEventsByPurpose(List<ChangeEvent> events) {
+        Map<String, List<ChangeEvent>> purposeGroups = new LinkedHashMap<>();
+        for (ChangeEvent event : events) {
+            String purpose = classifyEventPurpose(event);
+            purposeGroups.computeIfAbsent(purpose, k -> new ArrayList<>()).add(event);
+        }
+        return purposeGroups;
+    }
+    /**
+     * 단일 이벤트의 목적을 분류합니다.
+     */
+    private String classifyEventPurpose(ChangeEvent event) {
+        String category = event.getCategory();
+        String title = event.getTitle() != null ? event.getTitle() : "";
+        if ("SCHEMA_CHANGE".equals(category)) {
+            return "데이터 모델 확장";
+        }
+        if ("DEPENDENCY_CHANGE".equals(category)) {
+            return "기타 변경";
+        }
+        if ("API_CHANGE".equals(category)) {
+            if (containsAny(title, "추가", "신규")) return "신규 기능 추가";
+            if (containsAny(title, "수정", "변경")) return "기능 개선";
+            if (containsAny(title, "삭제", "제거")) return "기타 변경";
+            return "신규 기능 추가";
+        }
+        // CODE_CHANGE: title/description 키워드 기반 분류
+        if (containsAny(title, "연동", "통합")) return "외부 연동";
+        if (containsAny(title, "개선", "수정", "리팩토링", "변경")) return "기능 개선";
+        // 엔드유저가 몰라도 되는 시스템 내부 작업은 "신규 기능 추가"에서 제외
+        if (containsAny(title, "초기화", "동기화", "변환", "검증", "배치", "마이그레이션", "캐시", "인덱스", "로깅")) {
+            return "기타 변경";
+        }
+        return "신규 기능 추가";
     }
     private boolean containsAny(String text, String... keywords) {
         if (text == null) return false;
@@ -272,6 +495,9 @@ public class ReportGeneratorService {
             String trimmed = line.trim();
             if (trimmed.isEmpty() || trimmed.equals("기능별 변경 내용:")) continue;
             if (trimmed.startsWith("[") && trimmed.endsWith("]")) continue;
+            // 통계 헤더 줄 건너뜀 (예: "[repo] 커밋 692건, 변경 파일 2081개", "관련 기능: scout, ...")
+            if (trimmed.matches(".*커밋\\s*\\d+건.*변경\\s*파일\\s*\\d+개.*")) continue;
+            if (trimmed.startsWith("관련 기능:")) continue;
             if (trimmed.startsWith("- ")) trimmed = trimmed.substring(2).trim();
             if (trimmed.length() >= 5) return trimmed;
         }
@@ -292,6 +518,9 @@ public class ReportGeneratorService {
             if (trimmed.startsWith("[") && trimmed.endsWith("]")) continue;
             // "기능별 변경 내용:" 같은 메타 라인은 건너뜀
             if (trimmed.equals("기능별 변경 내용:")) continue;
+            // 통계 헤더 줄 건너뜀 (예: "[repo] 커밋 692건, 변경 파일 2081개", "관련 기능: scout, ...")
+            if (trimmed.matches(".*커밋\\s*\\d+건.*변경\\s*파일\\s*\\d+개.*")) continue;
+            if (trimmed.startsWith("관련 기능:")) continue;
             // "- " 접두사가 있으면 제거
             if (trimmed.startsWith("- ")) trimmed = trimmed.substring(2).trim();
             if (trimmed.length() < 3) continue;
