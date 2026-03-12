@@ -547,39 +547,36 @@ public class ChangeEventService {
         return repoName + " 코드 변경 (" + commits.size() + "건 커밋)";
     }
     /**
-     * description에서 기능별 변경 카테고리를 추출하여 구체적인 제목을 생성합니다.
+     * description에서 실제 변경 항목을 추출하여 구체적인 제목을 생성합니다.
      *
-     * <p>"기능별 변경 내용:" 아래의 [카테고리] 헤더에서 주요 변경 영역을 파악하고,
-     * 이를 조합하여 "스카우트 관리, 선수 평가 등 기능 변경" 형태의 제목을 만듭니다.
-     * 카테고리를 추출할 수 없으면 기존 방식의 제목을 반환합니다.</p>
+     * <p>description의 "- " 항목들 중 주요 내용을 조합하여
+     * "스카우트 관리 항목 추가, 날씨 조회 기능 추가 등" 형태의 제목을 만듭니다.</p>
      */
     private String buildTitleFromDescription(String description, int commitCount) {
         if (description == null || description.isBlank()) {
             return "프로젝트 코드 변경 (" + commitCount + "건 커밋)";
         }
-        // "기능별 변경 내용:" 아래의 [카테고리] 라인에서 카테고리명 추출
-        List<String> categories = new ArrayList<>();
-        boolean inFeatureSection = false;
+        // "- " 항목에서 실제 변경 내용 추출
+        List<String> items = new ArrayList<>();
         for (String line : description.split("\n")) {
             String trimmed = line.trim();
-            if (trimmed.equals("기능별 변경 내용:")) {
-                inFeatureSection = true;
-                continue;
-            }
-            if (inFeatureSection && trimmed.startsWith("[") && trimmed.endsWith("]")) {
-                categories.add(trimmed.substring(1, trimmed.length() - 1));
+            if (trimmed.startsWith("- ")) {
+                String item = trimmed.substring(2).trim();
+                if (item.length() >= 3) {
+                    items.add(item);
+                }
             }
         }
-        if (categories.isEmpty()) {
+        if (items.isEmpty()) {
             return "프로젝트 코드 변경 (" + commitCount + "건 커밋)";
         }
-        // 최대 3개 카테고리만 표시, 초과 시 "등" 추가
-        int displayCount = Math.min(categories.size(), 3);
-        String categoryText = String.join(", ", categories.subList(0, displayCount));
-        if (categories.size() > displayCount) {
-            categoryText += " 등";
+        // 최대 3개 항목만 표시, 초과 시 "등" 추가
+        int displayCount = Math.min(items.size(), 3);
+        String titleText = String.join(", ", items.subList(0, displayCount));
+        if (items.size() > displayCount) {
+            titleText += " 등";
         }
-        return categoryText + " 기능 변경";
+        return titleText;
     }
     /**
      * 레포지토리의 전체 커밋을 통합하여 기능 변경 중심의 description을 생성합니다.
@@ -637,24 +634,19 @@ public class ChangeEventService {
         }
         // LLM으로 카테고리별 변경 내용 압축 (LLM 없으면 원본 카테고리 구조 유지)
         Map<String, List<String>> compressedByCategory = llmDescriptionCompressorService.compress(changesByFeature);
-        // description 조립 (기능 변경 중심)
+        // description 조립 (변경 내용 중심, 통계는 부록으로)
         StringBuilder sb = new StringBuilder();
-        sb.append("[").append(repoName).append("] ");
-        sb.append("커밋 ").append(commits.size()).append("건, 변경 파일 ").append(allFilePaths.size()).append("개");
-        if (!topKeywords.isEmpty()) {
-            sb.append("\n관련 기능: ").append(String.join(", ", topKeywords));
-        }
         if (!compressedByCategory.isEmpty()) {
-            sb.append("\n\n기능별 변경 내용:");
             for (Map.Entry<String, List<String>> entry : compressedByCategory.entrySet()) {
                 if (entry.getValue().isEmpty()) continue;
-                sb.append("\n[").append(entry.getKey()).append("]");
+                sb.append("[").append(entry.getKey()).append("]");
                 for (String summary : entry.getValue()) {
-                    sb.append("\n  - ").append(summary);
+                    sb.append("\n- ").append(summary);
                 }
+                sb.append("\n");
             }
         }
-        return sb.toString();
+        return sb.toString().trim();
     }
     /**
      * 개발자용 changeSummary를 의도 기반 비즈니스 설명으로 변환합니다.
@@ -691,18 +683,18 @@ public class ChangeEventService {
                         repoEntityNames.add(toReadableName(fn.replace("Repository", "")));
                     } else if (fn.endsWith("Service")) {
                         String name = toReadableName(fn.replace("Service", ""));
-                        results.add(name + " 처리 기능 연동");
+                        results.add(name + " 처리를 연계할 수 있도록 연동");
                     } else {
                         hasRegularField = true;
                     }
                 }
                 // Repository 필드: 참조 엔티티 데이터 연동
                 if (!repoEntityNames.isEmpty()) {
-                    results.add(String.join(", ", repoEntityNames) + " 정보 관리 추가");
+                    results.add(String.join(", ", repoEntityNames) + " 정보를 조회·관리할 수 있도록 추가");
                 }
                 // 일반 필드: 소속 엔티티 단위로 의도 압축 (주민번호, 여권번호 → 선수상세 필드 추가)
                 if (hasRegularField) {
-                    results.add(entityName != null ? entityName + " 필드 추가" : "필드 추가");
+                    results.add(entityName != null ? entityName + " 정보를 추가로 관리할 수 있도록 항목 추가" : "관리 항목 추가");
                 }
                 continue;
             }
@@ -710,13 +702,13 @@ public class ChangeEventService {
             if (trimmed.startsWith("새 클래스:")) {
                 String className = trimmed.substring("새 클래스:".length()).trim();
                 String featureName = extractFeatureName(className);
-                results.add(featureName + " 기능 신규 추가");
+                results.add(featureName + " 기능을 새로 사용할 수 있도록 개발");
                 continue;
             }
             // 메서드 추가 → 의도 기반 압축: 개별 메서드 동작 대신 소속 엔티티 단위로 표현
             if (trimmed.startsWith("추가 메서드:")) {
                 if (entityName != null) {
-                    results.add(entityName + " 기능 추가");
+                    results.add(entityName + " 관련 업무를 처리할 수 있도록 기능 추가");
                 } else {
                     String methodsPart = trimmed.substring("추가 메서드:".length()).trim();
                     for (String methodName : methodsPart.split(",")) {
@@ -830,7 +822,7 @@ public class ChangeEventService {
             // is/has/can 같은 확인 메서드는 건너뜀
             return null;
         }
-        return targetKr + " " + action + " 기능 추가";
+        return targetKr + " " + action + " 기능을 사용할 수 있도록 추가";
     }
     /**
      * 영문 도메인 용어를 한국어로 변환합니다.
@@ -893,32 +885,19 @@ public class ChangeEventService {
     }
 
     /**
-     * 파일 경로에서 기능 영역을 추출합니다.
+     * 파일 경로에서 사용자 관점의 의도 영역을 추출합니다.
      *
-     * <p>패키지 구조를 기반으로 controller/service/domain 등의 레이어와
-     * 기능 키워드를 결합하여 기능 영역명을 반환합니다.
-     * 디렉토리 구조에서 부모 기능이 감지되면 계층적 키워드(parent/child)로 표현합니다.
-     * 예: /service/scout/weather/WeatherService.java → "비즈니스 로직 (scout/weather)"</p>
+     * <p>기술적 레이어(controller, service 등) 대신 도메인 키워드를 중심으로
+     * "어떤 업무 영역의 변경인지"를 사용자 관점에서 표현합니다.
+     * 예: /service/scout/weather/WeatherService.java → "스카우트 날씨"</p>
      */
     private String detectFeatureArea(String filePath) {
         String normalized = filePath.replace('\\', '/');
-        // 레이어 판별
-        String layer = "";
-        if (normalized.contains("/controller/")) layer = "API";
-        else if (normalized.contains("/service/")) layer = "비즈니스 로직";
-        else if (normalized.contains("/domain/") || normalized.contains("/entity/")) layer = "데이터 모델";
-        else if (normalized.contains("/dto/")) layer = "데이터 전송";
-        else if (normalized.contains("/config/")) layer = "설정";
-        else if (normalized.contains("/util/") || normalized.contains("/common/")) layer = "공통 모듈";
-        else if (normalized.contains("/repository/")) layer = "데이터 접근";
-        else if (normalized.endsWith(".sql")) layer = "DB 스키마";
-        else if (normalized.endsWith(".yml") || normalized.endsWith(".yaml") || normalized.endsWith(".properties")) layer = "설정";
         // 키워드 추출 (파일명 기반)
         List<String> keywords = LayerDetector.extractKeywords(filePath);
         // 디렉토리 구조에서 부모 기능 감지
         String parentFeature = extractParentFeature(normalized);
         if (!keywords.isEmpty() && parentFeature != null) {
-            // 부모 키워드와 다른 첫 번째 키워드를 자식으로 사용
             String childKeyword = null;
             for (String kw : keywords) {
                 if (!kw.equalsIgnoreCase(parentFeature)) {
@@ -927,18 +906,16 @@ public class ChangeEventService {
                 }
             }
             if (childKeyword != null) {
-                String hierarchicalKeyword = parentFeature + "/" + childKeyword;
-                if (!layer.isEmpty()) {
-                    return layer + " (" + hierarchicalKeyword + ")";
-                }
-                return hierarchicalKeyword;
+                // 부모/자식 키워드를 도메인 용어로 변환하여 의도 영역 표현
+                String parentName = applyDomainTerms(parentFeature);
+                String childName = applyDomainTerms(childKeyword);
+                return parentName + " " + childName;
             }
+            return applyDomainTerms(parentFeature);
         }
-        if (!keywords.isEmpty() && !layer.isEmpty()) {
-            return layer + " (" + keywords.get(0) + ")";
+        if (!keywords.isEmpty()) {
+            return applyDomainTerms(keywords.get(0));
         }
-        if (!layer.isEmpty()) return layer;
-        if (!keywords.isEmpty()) return keywords.get(0);
         return "기타";
     }
     /** 부모 기능으로 인식하지 않을 구조적/레이어 디렉토리명 */
