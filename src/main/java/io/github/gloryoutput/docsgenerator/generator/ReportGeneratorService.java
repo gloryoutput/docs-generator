@@ -490,7 +490,9 @@ public class ReportGeneratorService {
         // 서술어가 포함되어 있으면 문장으로 간주
         if (containsAny(text, "하였", "되었", "했습", "됩니", "합니",
                 "추가", "변경", "수정", "삭제", "개선", "확장", "적용",
-                "연동", "처리", "반영", "구현", "도입", "개발")) {
+                "연동", "처리", "반영", "구현", "도입", "개발",
+                "조회", "등록", "저장", "검색", "생성", "목록", "상세",
+                "출력", "입력", "오류", "버그", "장애", "누락")) {
             return false;
         }
         return true;
@@ -631,7 +633,12 @@ public class ReportGeneratorService {
             if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
                 String rawCategory = trimmed.substring(1, trimmed.length() - 1);
                 currentCategory = sanitizeForClient(rawCategory);
-                if (currentCategory.isBlank()) currentCategory = null;
+                if (currentCategory.isBlank()) {
+                    currentCategory = null;
+                } else {
+                    // 카테고리 헤더만 있고 하위 항목이 모두 필터링되어도 카테고리 자체는 출력되도록 보장
+                    groups.computeIfAbsent(currentCategory, k -> new ArrayList<>());
+                }
                 continue;
             }
             if (trimmed.equals("기능별 변경 내용:")) continue;

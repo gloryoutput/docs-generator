@@ -485,65 +485,151 @@ public class ChangeEventService {
      * <p>같은 레포지토리의 여러 커밋을 하나의 이벤트로 통합하여,
      * 중복 파일을 제거하고 커밋 이력/레이어/키워드를 구조화합니다.</p>
      */
+    private static final Set<String> BUG_FIX_KEYWORDS = Set.of(
+            "fix", "bug", "error", "오류", "에러", "버그", "수정", "hotfix", "patch",
+            "장애", "결함", "누락", "실패", "충돌", "복구");
     private List<ChangeEvent> buildCodeChangeEvents(UUID idAnalysisRequest, UUID idProject,
                                                      List<GitDiffResult> gitResults,
                                                      boolean mergeRepositories) {
         List<ChangeEvent> events = new ArrayList<>();
-        if (mergeRepositories) {
-            // 병합 모드: 모든 레포지토리의 커밋을 하나의 이벤트로 통합
-            List<GitDiffResult.CommitInfo> allValidCommits = new ArrayList<>();
-            List<String> repoNames = new ArrayList<>();
-            for (GitDiffResult gitResult : gitResults) {
-                if (gitResult.getCommits() == null || gitResult.getCommits().isEmpty()) continue;
-                List<GitDiffResult.CommitInfo> validCommits = gitResult.getCommits().stream()
-                        .filter(c -> c.getFileChanges() != null && !c.getFileChanges().isEmpty())
-                        .toList();
-                if (!validCommits.isEmpty()) {
-                    allValidCommits.addAll(validCommits);
-                    repoNames.add(gitResult.getRepositoryName());
+        // 모든 레포지토리에서 커밋을 수집하되, 버그 수정 커밋은 별도 분리
+        List<GitDiffResult.CommitInfo> allFeatureCommits = new ArrayList<>();
+        List<GitDiffResult.CommitInfo> allBugFixCommits = new ArrayList<>();
+        List<String> repoNames = new ArrayList<>();
+        for (GitDiffResult gitResult : gitResults) {
+            if (gitResult.getCommits() == null || gitResult.getCommits().isEmpty()) continue;
+            boolean hasValidCommit = false;
+            for (GitDiffResult.CommitInfo commit : gitResult.getCommits()) {
+                if (commit.getFileChanges() == null || commit.getFileChanges().isEmpty()) {
+                    // 파일 변경이 없어도 버그 수정 커밋이면 메시지 기반으로 이벤트 생성
+                    if (isBugFixCommit(commit)) {
+                        allBugFixCommits.add(commit);
+                        hasValidCommit = true;
+                    }
+                    continue;
                 }
+                if (isBugFixCommit(commit)) {
+                    allBugFixCommits.add(commit);
+                } else {
+                    allFeatureCommits.add(commit);
+                }
+                hasValidCommit = true;
             }
-            if (!allValidCommits.isEmpty()) {
-                String mergedRepoName = String.join(", ", repoNames);
-                String description = buildRepoDescription(mergedRepoName, allValidCommits);
-                String title = buildTitleFromDescription(description, allValidCommits.size());
-                events.add(ChangeEvent.builder()
-                        .idAnalysisRequest(idAnalysisRequest)
-                        .idProject(idProject)
-                        .category("CODE_CHANGE")
-                        .title(title)
-                        .description(description)
-                        .severity("LOW")
-                        .confidenceScore(0.8)
-                        .sourceType("GIT")
-                        .correlationKey("PROJECT")
-                        .build());
-            }
-        } else {
-            // 분리 모드: 레포지토리별 개별 이벤트 생성
-            for (GitDiffResult gitResult : gitResults) {
-                if (gitResult.getCommits() == null || gitResult.getCommits().isEmpty()) continue;
-                String repoName = gitResult.getRepositoryName();
-                List<GitDiffResult.CommitInfo> validCommits = gitResult.getCommits().stream()
-                        .filter(c -> c.getFileChanges() != null && !c.getFileChanges().isEmpty())
-                        .toList();
-                if (validCommits.isEmpty()) continue;
-                String description = buildRepoDescription(repoName, validCommits);
-                String title = buildTitleFromDescription(description, validCommits.size());
-                events.add(ChangeEvent.builder()
-                        .idAnalysisRequest(idAnalysisRequest)
-                        .idProject(idProject)
-                        .category("CODE_CHANGE")
-                        .title(title)
-                        .description(description)
-                        .severity("LOW")
-                        .confidenceScore(0.8)
-                        .sourceType("GIT")
-                        .correlationKey(repoName)
-                        .build());
+            if (hasValidCommit) {
+                repoNames.add(gitResult.getRepositoryName());
             }
         }
+        String correlationKey = mergeRepositories ? "PROJECT" : String.join(", ", repoNames);
+        // 기능 변경 이벤트 생성
+        if (!allFeatureCommits.isEmpty()) {
+            String repoName = mergeRepositories ? String.join(", ", repoNames)
+                    : repoNames.isEmpty() ? "unknown" : repoNames.get(0);
+            String description = buildRepoDescription(repoName, allFeatureCommits);
+            String title = buildTitleFromDescription(description, allFeatureCommits.size());
+            events.add(ChangeEvent.builder()
+                    .idAnalysisRequest(idAnalysisRequest)
+                    .idProject(idProject)
+                    .category("CODE_CHANGE")
+                    .title(title)
+                    .description(description)
+                    .severity("LOW")
+                    .confidenceScore(0.8)
+                    .sourceType("GIT")
+                    .correlationKey(correlationKey)
+                    .build());
+        }
+        // 버그 수정 커밋을 별도 이벤트로 생성
+        events.addAll(buildBugFixEvents(idAnalysisRequest, idProject, allBugFixCommits, correlationKey));
         return events;
+    }
+    /**
+     * 커밋 메시지에서 버그 수정 커밋인지 판별합니다.
+     */
+    private boolean isBugFixCommit(GitDiffResult.CommitInfo commit) {
+        String message = commit.getMessage();
+        if (message == null || message.isBlank()) return false;
+        String lower = message.toLowerCase();
+        for (String keyword : BUG_FIX_KEYWORDS) {
+            if (lower.contains(keyword.toLowerCase())) return true;
+        }
+        return false;
+    }
+    /**
+     * 버그 수정 커밋 목록에서 개별 오류수정 이벤트를 생성합니다.
+     *
+     * <p>유사한 버그 수정 커밋(같은 기능 영역)은 하나의 이벤트로 병합하고,
+     * 독립적인 버그 수정은 각각 별도 이벤트로 생성합니다.</p>
+     */
+    private List<ChangeEvent> buildBugFixEvents(UUID idAnalysisRequest, UUID idProject,
+                                                  List<GitDiffResult.CommitInfo> bugFixCommits,
+                                                  String correlationKey) {
+        List<ChangeEvent> events = new ArrayList<>();
+        if (bugFixCommits.isEmpty()) return events;
+        // 커밋 메시지를 제목으로 사용하여 개별 이벤트 생성 (중복 메시지는 병합)
+        Map<String, List<GitDiffResult.CommitInfo>> groupedByMessage = new LinkedHashMap<>();
+        for (GitDiffResult.CommitInfo commit : bugFixCommits) {
+            String normalizedMsg = normalizeCommitMessage(commit.getMessage());
+            groupedByMessage.computeIfAbsent(normalizedMsg, k -> new ArrayList<>()).add(commit);
+        }
+        for (Map.Entry<String, List<GitDiffResult.CommitInfo>> entry : groupedByMessage.entrySet()) {
+            String title = entry.getKey();
+            List<GitDiffResult.CommitInfo> commits = entry.getValue();
+            // 기능 영역별로 비즈니스 설명을 그룹핑 (파일 단위 기술 정보 대신 기능 단위 압축)
+            Map<String, Set<String>> changesByFeature = new LinkedHashMap<>();
+            Set<String> processedFiles = new HashSet<>();
+            for (GitDiffResult.CommitInfo commit : commits) {
+                if (commit.getFileChanges() == null) continue;
+                for (GitDiffResult.FileChange fc : commit.getFileChanges()) {
+                    if (fc.getFilePath() == null || isGeneratedFile(fc.getFilePath())
+                            || ReportNoiseFilter.isInfraFile(fc.getFilePath())
+                            || !processedFiles.add(fc.getFilePath())) continue;
+                    String featureArea = detectFeatureArea(fc.getFilePath());
+                    String changeSummary = fc.getChangeSummary();
+                    if (changeSummary != null && !changeSummary.isEmpty()) {
+                        List<String> converted = convertToBusinessDescription(changeSummary, fc.getFilePath());
+                        changesByFeature.computeIfAbsent(featureArea, k -> new LinkedHashSet<>()).addAll(converted);
+                    }
+                }
+            }
+            // description 조립 ([카테고리] 형식으로 기능 영역별 그룹핑)
+            StringBuilder desc = new StringBuilder();
+            for (Map.Entry<String, Set<String>> featureEntry : changesByFeature.entrySet()) {
+                if (featureEntry.getValue().isEmpty()) continue;
+                desc.append("[").append(featureEntry.getKey()).append("]");
+                for (String summary : featureEntry.getValue()) {
+                    desc.append("\n- ").append(summary);
+                }
+                desc.append("\n");
+            }
+            events.add(ChangeEvent.builder()
+                    .idAnalysisRequest(idAnalysisRequest)
+                    .idProject(idProject)
+                    .category("CODE_CHANGE")
+                    .title(title)
+                    .description(desc.toString().trim())
+                    .severity("MEDIUM")
+                    .confidenceScore(0.9)
+                    .sourceType("GIT")
+                    .correlationKey(correlationKey)
+                    .majorCategory("오류수정")
+                    .build());
+        }
+        log.info("버그 수정 커밋에서 {}건의 오류수정 이벤트 생성", events.size());
+        return events;
+    }
+    /**
+     * 커밋 메시지를 정규화하여 중복 병합에 사용합니다.
+     *
+     * <p>접두사(fix:, bug:, hotfix: 등)를 제거하고 앞뒤 공백을 정리합니다.</p>
+     */
+    private String normalizeCommitMessage(String message) {
+        if (message == null || message.isBlank()) return "오류 수정";
+        String normalized = message.trim();
+        // 접두사 제거 (fix:, bug:, hotfix:, [fix], feat: 등)
+        normalized = normalized.replaceAll("^(?i)(fix|bug|hotfix|patch|오류|에러|수정)\\s*[:：]\\s*", "");
+        normalized = normalized.replaceAll("^\\[(?i)(fix|bug|hotfix|patch)\\]\\s*", "");
+        normalized = normalized.trim();
+        return normalized.isEmpty() ? "오류 수정" : normalized;
     }
     /**
      * description에서 실제 변경 항목을 추출하여 구체적인 제목을 생성합니다.
