@@ -47,9 +47,6 @@ public class ReportGeneratorService {
      */
     public String generateReport(AnalysisRequest analysisRequest, String projectName,
                                   List<CorrelatedGroup> groups, String polishedDraft, String rawDraft) {
-        int totalEvents = groups.stream()
-                .mapToInt(g -> g.getEvents() != null ? g.getEvents().size() : 0)
-                .sum();
         String startDate = analysisRequest.getStartDate().format(DATE_FORMATTER);
         String endDate = analysisRequest.getEndDate().format(DATE_FORMATTER);
         String createdDate = LocalDateTime.now().format(DATE_KR_FORMATTER);
@@ -69,12 +66,11 @@ public class ReportGeneratorService {
         report.append("|------|------|\n");
         report.append("| 프로젝트 | ").append(projectName).append(" |\n");
         report.append("| 분석 기간 | ").append(startDate).append(" ~ ").append(endDate).append(" |\n");
-        report.append("| 총 변경 사항 | ").append(totalEvents).append("건 |\n");
         if (!categoryCount.isEmpty()) {
             StringBuilder catSummary = new StringBuilder();
             categoryCount.forEach((k, v) -> {
                 if (!catSummary.isEmpty()) catSummary.append(", ");
-                catSummary.append(k).append(" ").append(v).append("건");
+                catSummary.append(k);
             });
             report.append("| 변경 유형 | ").append(catSummary).append(" |\n");
         }
@@ -87,7 +83,7 @@ public class ReportGeneratorService {
         if (!sections.endsWith("\n")) {
             report.append("\n");
         }
-        log.info("최종 보고서 생성 완료 (프로젝트: {}, 이벤트: {}건)", projectName, totalEvents);
+        log.info("최종 보고서 생성 완료 (프로젝트: {})", projectName);
         return report.toString();
     }
 
@@ -150,15 +146,15 @@ public class ReportGeneratorService {
         sb.append("본 보고서는 ").append(projectName).append(" 프로젝트에서 ")
                 .append(startDate).append(" ~ ").append(endDate)
                 .append(" 기간 동안 수행된 소프트웨어 변경 작업을 정리한 보고서입니다.\n\n");
-        sb.append("해당 기간에 총 ").append(allEvents.size()).append("건의 변경이 이루어졌으며");
         List<String> summaryParts = new ArrayList<>();
-        if (!planChangeEvents.isEmpty()) summaryParts.add("기획수정 " + planChangeEvents.size() + "건");
-        if (!newFeatureEvents.isEmpty()) summaryParts.add("신기능 " + newFeatureEvents.size() + "건");
-        if (!bugFixEvents.isEmpty()) summaryParts.add("오류수정 " + bugFixEvents.size() + "건");
+        if (!planChangeEvents.isEmpty()) summaryParts.add("기획수정");
+        if (!newFeatureEvents.isEmpty()) summaryParts.add("신기능");
+        if (!bugFixEvents.isEmpty()) summaryParts.add("오류수정");
         if (!summaryParts.isEmpty()) {
-            sb.append(", ").append(String.join(", ", summaryParts)).append("이 포함되어 있습니다.\n\n");
+            sb.append("해당 기간에 ").append(String.join(", ", summaryParts))
+                    .append(" 관련 변경이 이루어졌습니다.\n\n");
         } else {
-            sb.append(".\n\n");
+            sb.append("해당 기간에 수행된 변경 작업을 정리하였습니다.\n\n");
         }
         sb.append("주요 변경 내용은 다음과 같습니다.\n\n");
         appendGroupedEventItems(sb, allEvents, "");
@@ -249,15 +245,15 @@ public class ReportGeneratorService {
         sb.append("상기 작업을 통해 다음과 같은 변경이 완료되었습니다.\n\n");
         int resultIdx = 1;
         if (!bugFixEvents.isEmpty()) {
-            sb.append(resultIdx++).append(". **오류수정 완료** (").append(bugFixEvents.size()).append("건)\n");
+            sb.append(resultIdx++).append(". **오류수정 완료**\n");
             appendGroupedEventItems(sb, bugFixEvents, "   ");
         }
         if (!planChangeEvents.isEmpty()) {
-            sb.append(resultIdx++).append(". **기획수정 완료** (").append(planChangeEvents.size()).append("건)\n");
+            sb.append(resultIdx++).append(". **기획수정 완료**\n");
             appendGroupedEventItems(sb, planChangeEvents, "   ");
         }
         if (!newFeatureEvents.isEmpty()) {
-            sb.append(resultIdx++).append(". **신기능 완료** (").append(newFeatureEvents.size()).append("건)\n");
+            sb.append(resultIdx++).append(". **신기능 완료**\n");
             appendGroupedEventItems(sb, newFeatureEvents, "   ");
         }
         sb.append("\n");
@@ -267,8 +263,7 @@ public class ReportGeneratorService {
         int followUpIdx = 1;
         if (!bugFixEvents.isEmpty()) {
             sb.append(followUpIdx++).append(". **오류수정 항목 점검**\n");
-            sb.append("   이번에 수정된 ").append(bugFixEvents.size())
-                    .append("건의 오류가 정상적으로 해결되었는지 확인하고, ")
+            sb.append("   수정된 오류가 정상적으로 해결되었는지 확인하고, ")
                     .append("동일한 문제가 재발하지 않는지 일정 기간 모니터링이 필요합니다.\n");
         }
         if (!planChangeEvents.isEmpty()) {
@@ -281,8 +276,7 @@ public class ReportGeneratorService {
         }
         if (!highEvents.isEmpty()) {
             sb.append(followUpIdx++).append(". **주요 변경 사항 집중 점검**\n");
-            sb.append("   이번 변경 중 중요도가 높은 항목이 ").append(highEvents.size())
-                    .append("건 포함되어 있으므로, 해당 기능을 우선적으로 점검하시기 바랍니다.\n");
+            sb.append("   이번 변경 중 중요도가 높은 항목이 포함되어 있으므로, 해당 기능을 우선적으로 점검하시기 바랍니다.\n");
         }
         if (followUpIdx == 1) {
             sb.append("이번 변경은 기존 기능에 미치는 영향이 제한적이므로, 별도의 후속 조치 없이 정상 운영이 가능합니다.\n");
@@ -456,17 +450,21 @@ public class ReportGeneratorService {
         }
         return result;
     }
-    /** 카테고리가 있으면 "카테고리: 항목" 형식으로 접두사를 붙여 추가합니다. */
+    /**
+     * 의미 있는 항목만 결과에 추가합니다.
+     *
+     * <p>기술 카테고리 접두사(데이터 모델, API, 스키마 등)는 비개발자에게 무의미하므로 제거하고,
+     * 맥락 없는 짧은 명사구("평가 이력", "배치 포지션" 등)는 이벤트 title이 맥락을 제공하므로
+     * 자체적으로 의미가 충분한 항목만 포함합니다.</p>
+     */
     private void addWithCategory(List<String> result, String item, String category) {
         String sanitized = sanitizeForClient(item);
         if (sanitized.isEmpty() || !sanitized.matches(".*[가-힣].*")) return;
-        // 단순 CRUD/화면 동작만 나열된 무의미한 항목 필터링 (예: "생성", "수정", "목록", "하프 목록")
         if (isGenericActionOnly(sanitized)) return;
-        if (category != null && !sanitized.contains(": ")) {
-            result.add(sanitizeForClient(category) + ": " + sanitized);
-        } else {
-            result.add(sanitized);
-        }
+        // 맥락 없는 짧은 명사구 필터링 (동사/서술어가 없는 10자 이하 항목)
+        if (isContextlessNoun(sanitized)) return;
+        // 기술 카테고리 접두사는 제거 (이벤트 title이 목적 맥락을 제공)
+        result.add(sanitized);
     }
     /**
      * 구체적 대상 없이 동작/화면 유형만 나열된 무의미한 항목인지 판별합니다.
@@ -476,10 +474,26 @@ public class ReportGeneratorService {
      */
     private boolean isGenericActionOnly(String text) {
         String cleaned = text.replaceAll("\\s+", "");
-        // 동작/화면 유형 키워드로만 구성된 짧은 항목 필터링
         String withoutActions = cleaned
                 .replaceAll("(생성|수정|삭제|목록|상세|조회|등록|저장|검색|추가|제거|변경|입력|출력|하프|default|view|bundle)", "");
         return withoutActions.isBlank();
+    }
+    /**
+     * 맥락 없는 짧은 명사구인지 판별합니다.
+     *
+     * <p>"평가 이력", "배치 포지션", "유형 목록" 등 무엇에 대한 것인지 알 수 없는
+     * 짧은 명사구는 이벤트 title이 맥락을 제공하므로 하위 항목으로는 무의미합니다.
+     * 서술어(동사/조사)가 포함된 문장이나 충분한 길이의 설명만 포함합니다.</p>
+     */
+    private boolean isContextlessNoun(String text) {
+        if (text.length() > 20) return false;
+        // 서술어가 포함되어 있으면 문장으로 간주
+        if (containsAny(text, "하였", "되었", "했습", "됩니", "합니",
+                "추가", "변경", "수정", "삭제", "개선", "확장", "적용",
+                "연동", "처리", "반영", "구현", "도입", "개발")) {
+            return false;
+        }
+        return true;
     }
     /**
      * 보고서 출력 텍스트에서 영문 기술 용어를 한국어로 치환합니다.
@@ -558,32 +572,80 @@ public class ReportGeneratorService {
         return result.replaceAll("\\s+", " ").trim();
     }
     /**
-     * 이벤트 목록을 목적(title) 단위로 출력합니다.
+     * 이벤트 목록을 기능 카테고리 단위로 그룹핑하여 출력합니다.
      *
-     * <p>description의 개별 줄을 나열하지 않고, 이벤트의 title을 목적 단위로 사용합니다.
-     * 유사한 title은 중복 제거됩니다.</p>
+     * <p>이벤트 description 내 [카테고리] 헤더를 기능 그룹 제목으로 사용하고,
+     * 해당 카테고리 아래의 세부 항목을 하위에 나열합니다.
+     * [카테고리] 구조가 없는 이벤트는 title을 그룹 제목으로 사용합니다.</p>
      *
      * <p>출력 형식 예시:
-     * 1. **경기 계획 관리 기능 개선**
-     * 2. **선수 평가 이력 관리 기능 추가**</p>
+     * 1. **경기 계획 관리**
+     *    - 경기 계획 그룹 생성 및 수정 화면 변경
+     *    - 마스터 데이터 연동 방식 변경
+     * 2. **선수 평가**
+     *    - 평가 이력 조회 및 비교 기능 추가</p>
      */
     private void appendGroupedEventItems(StringBuilder sb, List<ChangeEvent> events, String indent) {
-        // 이벤트 title을 목적 단위로 사용 (중복 제거, 순서 유지)
-        List<String> titles = new ArrayList<>();
-        Set<String> seen = new LinkedHashSet<>();
+        // 모든 이벤트의 description에서 [카테고리]별로 항목을 수집
+        Map<String, List<String>> categoryGroups = new LinkedHashMap<>();
         for (ChangeEvent event : events) {
-            String title = sanitizeForClient(event.getTitle());
-            if (title.isEmpty() || !title.matches(".*[가-힣].*")) continue;
-            if (isGenericActionOnly(title)) continue;
-            if (seen.add(title)) {
-                titles.add(title);
+            Map<String, List<String>> eventCategories = extractCategoryGroups(event);
+            if (eventCategories.isEmpty()) {
+                // [카테고리] 구조가 없으면 title을 그룹 제목으로 사용
+                String title = sanitizeForClient(event.getTitle());
+                if (!title.isEmpty() && title.matches(".*[가-힣].*") && !isGenericActionOnly(title)) {
+                    categoryGroups.computeIfAbsent(title, k -> new ArrayList<>());
+                }
+            } else {
+                for (Map.Entry<String, List<String>> entry : eventCategories.entrySet()) {
+                    categoryGroups.computeIfAbsent(entry.getKey(), k -> new ArrayList<>())
+                            .addAll(entry.getValue());
+                }
             }
         }
-        if (titles.isEmpty()) return;
+        if (categoryGroups.isEmpty()) return;
         int idx = 1;
-        for (String title : titles) {
-            sb.append(indent).append(idx++).append(". **").append(title).append("**\n");
+        for (Map.Entry<String, List<String>> entry : categoryGroups.entrySet()) {
+            String groupTitle = entry.getKey();
+            List<String> details = entry.getValue().stream().distinct().toList();
+            sb.append(indent).append(idx++).append(". **").append(groupTitle).append("**\n");
+            for (String detail : details) {
+                sb.append(indent).append("   - ").append(detail).append("\n");
+            }
         }
+    }
+    /**
+     * 이벤트 description에서 [카테고리]별 항목 그룹을 추출합니다.
+     *
+     * <p>[카테고리명] 헤더를 그룹 제목으로 사용하고, 하위 항목을 수집합니다.
+     * 카테고리명은 sanitizeForClient로 한국어 변환 후 그룹 제목으로 사용합니다.</p>
+     */
+    private Map<String, List<String>> extractCategoryGroups(ChangeEvent event) {
+        String description = event.getDescription();
+        if (description == null || description.isBlank()) return Collections.emptyMap();
+        Map<String, List<String>> groups = new LinkedHashMap<>();
+        String currentCategory = null;
+        for (String line : description.split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) continue;
+            if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                String rawCategory = trimmed.substring(1, trimmed.length() - 1);
+                currentCategory = sanitizeForClient(rawCategory);
+                if (currentCategory.isBlank()) currentCategory = null;
+                continue;
+            }
+            if (trimmed.equals("기능별 변경 내용:")) continue;
+            if (trimmed.matches(".*커밋\\s*\\d+건.*변경\\s*파일\\s*\\d+개.*")) continue;
+            if (trimmed.startsWith("관련 기능:")) continue;
+            if (currentCategory == null) continue;
+            if (trimmed.startsWith("- ")) trimmed = trimmed.substring(2).trim();
+            if (trimmed.length() < 3) continue;
+            String sanitized = sanitizeForClient(trimmed);
+            if (sanitized.isEmpty() || !sanitized.matches(".*[가-힣].*")) continue;
+            if (isGenericActionOnly(sanitized)) continue;
+            groups.computeIfAbsent(currentCategory, k -> new ArrayList<>()).add(sanitized);
+        }
+        return groups;
     }
     /**
      * 카테고리 코드를 클라이언트가 이해할 수 있는 표시명으로 변환합니다.
