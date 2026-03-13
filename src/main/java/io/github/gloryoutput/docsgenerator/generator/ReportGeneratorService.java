@@ -53,14 +53,13 @@ public class ReportGeneratorService {
         String startDate = analysisRequest.getStartDate().format(DATE_FORMATTER);
         String endDate = analysisRequest.getEndDate().format(DATE_FORMATTER);
         String createdDate = LocalDateTime.now().format(DATE_KR_FORMATTER);
-        // 카테고리별 통계 (클라이언트에게 무의미한 CODE_CHANGE는 제외)
+        // 대분류별 통계 (기획수정, 신기능, 오류수정)
         Map<String, Integer> categoryCount = new LinkedHashMap<>();
         for (CorrelatedGroup group : groups) {
             if (group.getEvents() == null) continue;
             for (ChangeEvent event : group.getEvents()) {
-                if (!"CODE_CHANGE".equals(event.getCategory())) {
-                    categoryCount.merge(event.getCategory(), 1, Integer::sum);
-                }
+                String majorCategory = classifyMajorCategory(event);
+                categoryCount.merge(majorCategory, 1, Integer::sum);
             }
         }
         StringBuilder report = new StringBuilder();
@@ -75,7 +74,7 @@ public class ReportGeneratorService {
             StringBuilder catSummary = new StringBuilder();
             categoryCount.forEach((k, v) -> {
                 if (!catSummary.isEmpty()) catSummary.append(", ");
-                catSummary.append(formatCategoryName(k)).append(" ").append(v).append("건");
+                catSummary.append(k).append(" ").append(v).append("건");
             });
             report.append("| 변경 유형 | ").append(catSummary).append(" |\n");
         }
@@ -119,62 +118,60 @@ public class ReportGeneratorService {
     /**
      * LLM 호출 실패 시 이벤트 데이터로부터 6개 섹션 fallback 콘텐츠를 생성합니다.
      *
-     * <p>이벤트를 문제(오류/버그 수정)와 변경(신규 개발/기능 개선)으로 분류하여
-     * 각 섹션의 성격에 맞는 내용을 배치합니다.
-     * - 목적/결과: 문제 수정과 기능 변경을 모두 포함
-     * - 발생한 문제/문제 원인: 실제 문제(오류/버그)만 기술
-     * - 문제 해결 과정: 문제 수정과 기능 개발 과정을 구분하여 서술</p>
+     * <p>이벤트를 대분류(기획수정, 신기능, 오류수정)로 분류하여
+     * 각 섹션의 성격에 맞는 내용을 배치합니다.</p>
      */
     private String buildFallbackSections(String projectName, String startDate, String endDate,
                                           List<CorrelatedGroup> groups,
                                           Map<String, Integer> categoryCount) {
         log.info("LLM 미사용 - fallback 6개 섹션 생성 (프로젝트: {})", projectName);
-        // 전체 이벤트 수집 및 분류 (문제 vs 변경)
+        // 전체 이벤트 수집 및 대분류별 분류 (기획수정, 신기능, 오류수정)
         List<ChangeEvent> allEvents = new ArrayList<>();
         List<ChangeEvent> highEvents = new ArrayList<>();
-        List<ChangeEvent> problemEvents = new ArrayList<>();
-        List<ChangeEvent> featureEvents = new ArrayList<>();
+        List<ChangeEvent> planChangeEvents = new ArrayList<>();
+        List<ChangeEvent> newFeatureEvents = new ArrayList<>();
+        List<ChangeEvent> bugFixEvents = new ArrayList<>();
         for (CorrelatedGroup group : groups) {
             if (group.getEvents() == null) continue;
             for (ChangeEvent event : group.getEvents()) {
                 allEvents.add(event);
                 if ("HIGH".equals(event.getSeverity())) highEvents.add(event);
-                if (isProblemEvent(event)) {
-                    problemEvents.add(event);
-                } else {
-                    featureEvents.add(event);
+                String majorCategory = classifyMajorCategory(event);
+                switch (majorCategory) {
+                    case "기획수정" -> planChangeEvents.add(event);
+                    case "신기능" -> newFeatureEvents.add(event);
+                    case "오류수정" -> bugFixEvents.add(event);
                 }
             }
         }
         StringBuilder sb = new StringBuilder();
-        // ### 목적: 전체 변경 개요 (문제 수정 + 기능 변경 모두 포함)
+        // ### 목적: 전체 변경 개요 (대분류별 건수 포함)
         sb.append("### 목적\n\n");
         sb.append("본 보고서는 ").append(projectName).append(" 프로젝트에서 ")
                 .append(startDate).append(" ~ ").append(endDate)
                 .append(" 기간 동안 수행된 소프트웨어 변경 작업을 정리한 보고서입니다.\n\n");
-        // 유형별 건수 요약
-        if (!problemEvents.isEmpty() && !featureEvents.isEmpty()) {
-            sb.append("해당 기간에 총 ").append(allEvents.size()).append("건의 변경이 이루어졌으며, ")
-                    .append("오류 수정 ").append(problemEvents.size()).append("건과 ")
-                    .append("신규 개발 및 기능 개선 ").append(featureEvents.size()).append("건이 포함되어 있습니다.\n\n");
-        } else if (!problemEvents.isEmpty()) {
-            sb.append("해당 기간에 총 ").append(problemEvents.size()).append("건의 오류 수정이 진행되었습니다.\n\n");
+        sb.append("해당 기간에 총 ").append(allEvents.size()).append("건의 변경이 이루어졌으며");
+        List<String> summaryParts = new ArrayList<>();
+        if (!planChangeEvents.isEmpty()) summaryParts.add("기획수정 " + planChangeEvents.size() + "건");
+        if (!newFeatureEvents.isEmpty()) summaryParts.add("신기능 " + newFeatureEvents.size() + "건");
+        if (!bugFixEvents.isEmpty()) summaryParts.add("오류수정 " + bugFixEvents.size() + "건");
+        if (!summaryParts.isEmpty()) {
+            sb.append(", ").append(String.join(", ", summaryParts)).append("이 포함되어 있습니다.\n\n");
         } else {
-            sb.append("해당 기간에 총 ").append(featureEvents.size())
-                    .append("건의 신규 개발 및 기능 개선이 진행되었습니다.\n\n");
+            sb.append(".\n\n");
         }
         sb.append("주요 변경 내용은 다음과 같습니다.\n\n");
         appendGroupedEventItems(sb, allEvents, "");
         sb.append("\n");
-        // ### 발생한 문제: 실제 오류/버그만 기술, "어떤 기능에서 어떤 문제" 형식
+        // ### 발생한 문제: 오류수정 이벤트만 기술
         sb.append("### 발생한 문제\n\n");
-        if (problemEvents.isEmpty()) {
+        if (bugFixEvents.isEmpty()) {
             sb.append("해당 기간에 보고된 시스템 오류 또는 장애는 없으며, ")
-                    .append("신규 기능 개발 및 기존 기능 개선 위주로 작업이 진행되었습니다.\n\n");
+                    .append("기획수정 및 신기능 개발 위주로 작업이 진행되었습니다.\n\n");
         } else {
             sb.append("해당 기간에 다음과 같은 문제가 확인되어 수정이 필요하였습니다.\n\n");
             int probIdx = 1;
-            for (ChangeEvent event : problemEvents) {
+            for (ChangeEvent event : bugFixEvents) {
                 List<String> details = extractMeaningfulLines(event.getDescription(), 10);
                 sb.append(probIdx++).append(". **").append(sanitizeForClient(event.getTitle())).append("**\n");
                 if (details.isEmpty()) {
@@ -187,13 +184,13 @@ public class ReportGeneratorService {
             }
             sb.append("\n");
         }
-        // ### 문제 원인: 실제 문제의 원인만, 기능 맥락 포함
+        // ### 문제 원인: 오류수정 이벤트의 원인만 기술
         sb.append("### 문제 원인\n\n");
-        if (problemEvents.isEmpty()) {
-            sb.append("해당 기간에 오류 수정 사항이 없으므로 본 항목은 해당되지 않습니다.\n\n");
+        if (bugFixEvents.isEmpty()) {
+            sb.append("해당 기간에 오류수정 사항이 없으므로 본 항목은 해당되지 않습니다.\n\n");
         } else {
             sb.append("위 문제들의 원인은 다음과 같이 분석되었습니다.\n\n");
-            for (ChangeEvent event : problemEvents) {
+            for (ChangeEvent event : bugFixEvents) {
                 List<String> causeLines = extractMeaningfulLines(
                         event.getDescription() != null ? event.getDescription() : "", 10);
                 if (!causeLines.isEmpty()) {
@@ -220,91 +217,68 @@ public class ReportGeneratorService {
             }
             sb.append("\n");
         }
-        // ### 문제 해결 과정: 문제 수정과 기능 개발을 구분하여 서술
+        // ### 문제 해결 과정: 대분류별로 구분하여 서술
         sb.append("### 문제 해결 과정\n\n");
-        if (!problemEvents.isEmpty()) {
-            sb.append("#### 오류 수정\n\n");
-            appendGroupedEventItems(sb, problemEvents, "");
+        if (!bugFixEvents.isEmpty()) {
+            sb.append("#### 오류수정\n\n");
+            appendGroupedEventItems(sb, bugFixEvents, "");
             sb.append("\n");
         }
-        if (!featureEvents.isEmpty()) {
-            if (!problemEvents.isEmpty()) {
-                sb.append("#### 기능 개발 및 개선\n\n");
-            }
-            Map<String, List<ChangeEvent>> eventsByPurpose = groupEventsByPurpose(featureEvents);
+        if (!planChangeEvents.isEmpty()) {
+            sb.append("#### 기획수정\n\n");
+            Map<String, List<ChangeEvent>> eventsByPurpose = groupEventsByPurpose(planChangeEvents);
             int stepIndex = 1;
             for (Map.Entry<String, List<ChangeEvent>> purposeEntry : eventsByPurpose.entrySet()) {
-                String purpose = purposeEntry.getKey();
-                List<ChangeEvent> events = purposeEntry.getValue();
-                sb.append(stepIndex++).append(". **").append(purpose).append("**\n");
-                appendGroupedEventItems(sb, events, "   ");
+                sb.append(stepIndex++).append(". **").append(purposeEntry.getKey()).append("**\n");
+                appendGroupedEventItems(sb, purposeEntry.getValue(), "   ");
             }
             sb.append("\n");
         }
-        // ### 결과: 카테고리별로 분류하여 완료 상태 기술
+        if (!newFeatureEvents.isEmpty()) {
+            sb.append("#### 신기능\n\n");
+            Map<String, List<ChangeEvent>> eventsByPurpose = groupEventsByPurpose(newFeatureEvents);
+            int stepIndex = 1;
+            for (Map.Entry<String, List<ChangeEvent>> purposeEntry : eventsByPurpose.entrySet()) {
+                sb.append(stepIndex++).append(". **").append(purposeEntry.getKey()).append("**\n");
+                appendGroupedEventItems(sb, purposeEntry.getValue(), "   ");
+            }
+            sb.append("\n");
+        }
+        // ### 결과: 대분류별로 분류하여 완료 상태 기술
         sb.append("### 결과\n\n");
         sb.append("상기 작업을 통해 다음과 같은 변경이 완료되었습니다.\n\n");
         int resultIdx = 1;
-        if (!problemEvents.isEmpty()) {
-            sb.append(resultIdx++).append(". **오류 수정 완료** (").append(problemEvents.size()).append("건)\n");
-            appendGroupedEventItems(sb, problemEvents, "   ");
+        if (!bugFixEvents.isEmpty()) {
+            sb.append(resultIdx++).append(". **오류수정 완료** (").append(bugFixEvents.size()).append("건)\n");
+            appendGroupedEventItems(sb, bugFixEvents, "   ");
         }
-        List<ChangeEvent> schemaEvents = featureEvents.stream()
-                .filter(e -> "SCHEMA_CHANGE".equals(e.getCategory())).toList();
-        if (!schemaEvents.isEmpty()) {
-            sb.append(resultIdx++).append(". **데이터 관리 항목 변경 완료** (").append(schemaEvents.size()).append("건)\n");
-            appendGroupedEventItems(sb, schemaEvents, "   ");
+        if (!planChangeEvents.isEmpty()) {
+            sb.append(resultIdx++).append(". **기획수정 완료** (").append(planChangeEvents.size()).append("건)\n");
+            appendGroupedEventItems(sb, planChangeEvents, "   ");
         }
-        List<ChangeEvent> apiEvents = featureEvents.stream()
-                .filter(e -> "API_CHANGE".equals(e.getCategory())).toList();
-        if (!apiEvents.isEmpty()) {
-            sb.append(resultIdx++).append(". **화면 기능 변경 완료** (").append(apiEvents.size()).append("건)\n");
-            appendGroupedEventItems(sb, apiEvents, "   ");
-        }
-        List<ChangeEvent> otherEvents = featureEvents.stream()
-                .filter(e -> !"SCHEMA_CHANGE".equals(e.getCategory())
-                        && !"API_CHANGE".equals(e.getCategory())).toList();
-        if (!otherEvents.isEmpty()) {
-            sb.append(resultIdx++).append(". **기능 개발 및 개선 완료** (").append(otherEvents.size()).append("건)\n");
-            appendGroupedEventItems(sb, otherEvents, "   ");
+        if (!newFeatureEvents.isEmpty()) {
+            sb.append(resultIdx++).append(". **신기능 완료** (").append(newFeatureEvents.size()).append("건)\n");
+            appendGroupedEventItems(sb, newFeatureEvents, "   ");
         }
         sb.append("\n");
-        // ### 개선 및 예방 방안: 유형별로 묶어서 자연스러운 문장으로 서술
+        // ### 개선 및 예방 방안: 대분류별로 묶어서 자연스러운 문장으로 서술
         sb.append("### 개선 및 예방 방안\n\n");
         sb.append("이번 변경 적용 후 다음 사항을 확인하시기 바랍니다.\n\n");
         int followUpIdx = 1;
-        // 1) 오류 수정 항목이 있는 경우
-        if (!problemEvents.isEmpty()) {
-            sb.append(followUpIdx++).append(". **오류 수정 항목 점검**\n");
-            sb.append("   이번에 수정된 ").append(problemEvents.size())
+        if (!bugFixEvents.isEmpty()) {
+            sb.append(followUpIdx++).append(". **오류수정 항목 점검**\n");
+            sb.append("   이번에 수정된 ").append(bugFixEvents.size())
                     .append("건의 오류가 정상적으로 해결되었는지 확인하고, ")
                     .append("동일한 문제가 재발하지 않는지 일정 기간 모니터링이 필요합니다.\n");
         }
-        // 2) 데이터 관리 항목 변경이 있는 경우
-        long schemaCount = featureEvents.stream()
-                .filter(e -> "SCHEMA_CHANGE".equals(e.getCategory())).count();
-        if (schemaCount > 0) {
-            sb.append(followUpIdx++).append(". **데이터 관리 항목 변경 확인**\n");
-            sb.append("   관리 항목이 변경된 부분이 있으므로, ")
-                    .append("기존에 입력된 데이터가 정상적으로 조회되는지 확인이 필요합니다.\n");
+        if (!planChangeEvents.isEmpty()) {
+            sb.append(followUpIdx++).append(". **기획수정 항목 확인**\n");
+            sb.append("   기획 변경에 따른 화면 및 데이터 처리가 변경된 기획 내용과 일치하는지 확인이 필요합니다.\n");
         }
-        // 3) 삭제된 기능이 있는 경우
-        long deletedCount = featureEvents.stream()
-                .filter(e -> containsAny(e.getTitle(), "삭제", "제거")).count();
-        if (deletedCount > 0) {
-            sb.append(followUpIdx++).append(". **삭제된 기능 영향 확인**\n");
-            sb.append("   일부 기능이 삭제되었으므로, ")
-                    .append("해당 기능을 사용하던 업무에 영향이 없는지 확인이 필요합니다.\n");
+        if (!newFeatureEvents.isEmpty()) {
+            sb.append(followUpIdx++).append(". **신기능 동작 확인**\n");
+            sb.append("   새로 추가된 기능이 화면에서 정상적으로 동작하는지 확인하시기 바랍니다.\n");
         }
-        // 4) 신규·변경 기능이 있는 경우
-        long newFeatureCount = featureEvents.stream()
-                .filter(e -> !containsAny(e.getTitle(), "삭제", "제거"))
-                .filter(e -> !"SCHEMA_CHANGE".equals(e.getCategory())).count();
-        if (newFeatureCount > 0) {
-            sb.append(followUpIdx++).append(". **신규 및 변경 기능 동작 확인**\n");
-            sb.append("   새로 추가되거나 변경된 기능이 화면에서 정상적으로 동작하는지 확인하시기 바랍니다.\n");
-        }
-        // 5) 중요도가 높은 변경이 있는 경우
         if (!highEvents.isEmpty()) {
             sb.append(followUpIdx++).append(". **주요 변경 사항 집중 점검**\n");
             sb.append("   이번 변경 중 중요도가 높은 항목이 ").append(highEvents.size())
@@ -316,19 +290,42 @@ public class ReportGeneratorService {
         return sb.toString();
     }
     /**
-     * 이벤트가 문제(오류/버그 수정)인지 판별합니다.
+     * 이벤트를 대분류(기획수정, 신기능, 오류수정)로 분류합니다.
      *
-     * <p>이벤트의 title과 description에서 오류/버그 관련 키워드를 탐지합니다.
-     * 신규 개발이나 기능 개선과 구분하여 보고서의 "발생한 문제" 섹션에
-     * 실제 문제만 기술하기 위해 사용합니다.</p>
+     * <p>이벤트의 title과 description에서 키워드를 탐지하여 판별합니다.
+     * - 오류수정: 오류/에러/버그/장애 등 문제 관련 키워드 포함
+     * - 기획수정: 기획 변경/요구사항 변경/사양 변경/스펙 변경 등 기획 관련 키워드 포함,
+     *            또는 기존 기능의 수정/변경/개선에 해당
+     * - 신기능: 신규 추가/새로 개발된 기능</p>
+     */
+    private String classifyMajorCategory(ChangeEvent event) {
+        // LLM이 분류한 대분류가 있으면 우선 사용
+        if (event.getMajorCategory() != null && !event.getMajorCategory().isBlank()) {
+            return event.getMajorCategory();
+        }
+        // LLM 미사용 시 키워드 기반 fallback
+        String title = event.getTitle() != null ? event.getTitle() : "";
+        if (containsAny(title,
+                "오류", "에러", "버그", "장애", "결함", "누락", "잘못",
+                "실패", "충돌", "복구", "fix", "bug", "error")) {
+            return "오류수정";
+        }
+        // 기획수정: title에 기획 변경, 기존 기능 수정/변경/개선 키워드
+        if (containsAny(title,
+                "기획", "요구사항", "사양", "스펙", "정책")) {
+            return "기획수정";
+        }
+        if (containsAny(title, "수정", "변경", "개선", "리팩토링", "제거", "삭제")) {
+            return "기획수정";
+        }
+        // 신기능: 나머지 (신규 추가, 새 기능)
+        return "신기능";
+    }
+    /**
+     * 이벤트가 문제(오류/버그 수정)인지 판별합니다.
      */
     private boolean isProblemEvent(ChangeEvent event) {
-        String title = event.getTitle() != null ? event.getTitle() : "";
-        String desc = event.getDescription() != null ? event.getDescription() : "";
-        String combined = title + " " + desc;
-        return containsAny(combined,
-                "오류", "에러", "버그", "장애", "결함", "누락", "잘못",
-                "실패", "충돌", "복구", "수정", "fix", "bug", "error");
+        return "오류수정".equals(classifyMajorCategory(event));
     }
     /**
      * 이벤트 제목에서 기능명을 추출합니다.
@@ -463,11 +460,26 @@ public class ReportGeneratorService {
     private void addWithCategory(List<String> result, String item, String category) {
         String sanitized = sanitizeForClient(item);
         if (sanitized.isEmpty() || !sanitized.matches(".*[가-힣].*")) return;
+        // 단순 CRUD/화면 동작만 나열된 무의미한 항목 필터링 (예: "생성", "수정", "목록", "하프 목록")
+        if (isGenericActionOnly(sanitized)) return;
         if (category != null && !sanitized.contains(": ")) {
             result.add(sanitizeForClient(category) + ": " + sanitized);
         } else {
             result.add(sanitized);
         }
+    }
+    /**
+     * 구체적 대상 없이 동작/화면 유형만 나열된 무의미한 항목인지 판별합니다.
+     *
+     * <p>"생성", "수정", "목록", "하프 목록", "상세", "삭제" 등
+     * 대상 기능명 없이 동작명만 있는 항목은 보고서에 포함해도 의미가 없으므로 제외합니다.</p>
+     */
+    private boolean isGenericActionOnly(String text) {
+        String cleaned = text.replaceAll("\\s+", "");
+        // 동작/화면 유형 키워드로만 구성된 짧은 항목 필터링
+        String withoutActions = cleaned
+                .replaceAll("(생성|수정|삭제|목록|상세|조회|등록|저장|검색|추가|제거|변경|입력|출력|하프|default|view|bundle)", "");
+        return withoutActions.isBlank();
     }
     /**
      * 보고서 출력 텍스트에서 영문 기술 용어를 한국어로 치환합니다.
@@ -546,89 +558,42 @@ public class ReportGeneratorService {
         return result.replaceAll("\\s+", " ").trim();
     }
     /**
-     * 이벤트 목록에서 항목을 추출하고 유사 항목을 그룹핑하여
-     * "번호. 그룹제목 + 하위 항목" 형식으로 출력합니다.
+     * 이벤트 목록을 목적(title) 단위로 출력합니다.
+     *
+     * <p>description의 개별 줄을 나열하지 않고, 이벤트의 title을 목적 단위로 사용합니다.
+     * 유사한 title은 중복 제거됩니다.</p>
      *
      * <p>출력 형식 예시:
-     * 1. **선수 관련**
-     *    - 테이블에 신규 관리 항목 추가
-     *    - 관리 항목 형식 변경
-     * 2. **스카우트 관련**
-     *    - 후보 처리 기능 추가
-     *    - 관찰 태그 조회 기능 신규 개발</p>
+     * 1. **경기 계획 관리 기능 개선**
+     * 2. **선수 평가 이력 관리 기능 추가**</p>
      */
     private void appendGroupedEventItems(StringBuilder sb, List<ChangeEvent> events, String indent) {
-        List<String> items = new ArrayList<>();
+        // 이벤트 title을 목적 단위로 사용 (중복 제거, 순서 유지)
+        List<String> titles = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
         for (ChangeEvent event : events) {
-            List<String> details = extractMeaningfulLines(event.getDescription(), 50);
-            if (details.isEmpty()) {
-                String title = sanitizeForClient(event.getTitle());
-                if (!title.isEmpty() && title.matches(".*[가-힣].*")) {
-                    items.add(title);
-                }
-            } else {
-                items.addAll(details);
+            String title = sanitizeForClient(event.getTitle());
+            if (title.isEmpty() || !title.matches(".*[가-힣].*")) continue;
+            if (isGenericActionOnly(title)) continue;
+            if (seen.add(title)) {
+                titles.add(title);
             }
         }
-        if (items.isEmpty()) return;
-        Map<String, List<String>> groups = new LinkedHashMap<>();
-        for (String item : items) {
-            String[] kd = extractMergeKeyAndDetail(item);
-            groups.computeIfAbsent(kd[0], k -> new ArrayList<>());
-            if (!kd[1].isBlank()) {
-                groups.get(kd[0]).add(kd[1]);
-            }
-        }
+        if (titles.isEmpty()) return;
         int idx = 1;
-        for (Map.Entry<String, List<String>> entry : groups.entrySet()) {
-            String groupTitle = entry.getKey();
-            List<String> subItems = entry.getValue().stream().distinct().toList();
-            sb.append(indent).append(idx++).append(". **").append(groupTitle).append("**\n");
-            if (!subItems.isEmpty()) {
-                // 짧은 단일 키워드 항목(컬럼명 등)은 한 줄로 합침
-                if (subItems.stream().allMatch(s -> !s.contains(" ") && s.length() <= 40)) {
-                    sb.append(indent).append("   - ").append(String.join(", ", subItems)).append("\n");
-                } else {
-                    for (String sub : subItems) {
-                        sb.append(indent).append("   - ").append(sub).append("\n");
-                    }
-                }
-            }
+        for (String title : titles) {
+            sb.append(indent).append(idx++).append(". **").append(title).append("**\n");
         }
-    }
-    /**
-     * 항목 문자열에서 병합 키와 상세 정보를 분리합니다.
-     *
-     * <p>"선수 테이블에 신규 관리 항목 추가" → ["선수 관련", "테이블에 신규 관리 항목 추가"]
-     * "스카우트 후보 처리 기능 추가" → ["스카우트 관련", "후보 처리 기능 추가"]</p>
-     *
-     * @return [0]: 병합 키, [1]: 상세 정보
-     */
-    private String[] extractMergeKeyAndDetail(String item) {
-        if (item == null || item.isBlank()) return new String[]{"기타", ""};
-        // "항목 추가: 여권번호" → key: "항목 추가", detail: "여권번호"
-        int colonIdx = item.indexOf(": ");
-        if (colonIdx > 0) {
-            String prefix = item.substring(0, colonIdx).trim();
-            String value = item.substring(colonIdx + 2).trim();
-            return new String[]{prefix, value};
-        }
-        // 자유 텍스트: 첫 번째 한글 단어를 키로 사용
-        String[] words = item.split("\\s+", 2);
-        if (words.length >= 2 && words[0].matches(".*[가-힣].*")) {
-            return new String[]{words[0] + " 관련", words[1]};
-        }
-        return new String[]{item, ""};
     }
     /**
      * 카테고리 코드를 클라이언트가 이해할 수 있는 표시명으로 변환합니다.
      */
     private String formatCategoryName(String category) {
         return switch (category) {
-            case "SCHEMA_CHANGE" -> "데이터 관리 항목 변경";
-            case "API_CHANGE" -> "화면 기능 변경";
-            case "DEPENDENCY_CHANGE" -> "외부 연동 변경";
-            default -> "기타";
+            case "SCHEMA_CHANGE" -> "기획수정";
+            case "API_CHANGE" -> "신기능";
+            case "DEPENDENCY_CHANGE" -> "기획수정";
+            default -> "신기능";
         };
     }
 }

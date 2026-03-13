@@ -57,6 +57,15 @@ public class LlmChangeEventEnhancerService {
             "- **HIGH**: DB 스키마 변경, 인증/보안 변경, 기존 API 삭제/호환성 파괴, 대규모 리팩토링\n" +
             "- **MEDIUM**: 기존 기능 수정, 새 API 추가, 비즈니스 로직 변경, Entity 구조 변경\n" +
             "- **LOW**: 설정 변경, 코드 정리, 문서 수정, 유틸리티 추가, 네이밍 변경\n\n" +
+            "## 대분류 판별 기준 (majorCategory)\n" +
+            "각 이벤트를 반드시 다음 3가지 대분류 중 하나로 분류하세요:\n" +
+            "- **기획수정**: 기획 변경에 따른 기존 기능 수정/변경/개선/삭제, 요구사항 변경, 스펙 변경, 화면 변경, 데이터 항목 변경\n" +
+            "- **신기능**: 기존에 없던 신규 기능 추가, 새로운 API/화면/테이블 신규 개발\n" +
+            "- **오류수정**: 기존 기능의 오류/에러/버그/장애 수정, 결함 보정, 잘못된 동작 교정\n\n" +
+            "판별 시 주의사항:\n" +
+            "- '데이터 모델 확장', '컬럼 추가', '테이블 추가' 등은 기능 목적에 따라 판별하세요 (신규 기능을 위한 것이면 '신기능', 기존 기능 변경이면 '기획수정')\n" +
+            "- '수정'이라는 단어가 있다고 무조건 '오류수정'이 아닙니다. 기능 자체를 수정/개선한 것이면 '기획수정'입니다\n" +
+            "- '오류수정'은 실제 오류/버그/장애가 발생하여 이를 고친 경우에만 해당합니다\n\n" +
             "## 응답 형식\n" +
             "반드시 아래 JSON 배열 형식으로만 응답하세요. 다른 텍스트를 포함하지 마세요.\n" +
             "[\n" +
@@ -64,7 +73,8 @@ public class LlmChangeEventEnhancerService {
             "    \"index\": 0,\n" +
             "    \"title\": \"개선된 제목\",\n" +
             "    \"description\": \"개선된 설명\",\n" +
-            "    \"severity\": \"HIGH|MEDIUM|LOW\"\n" +
+            "    \"severity\": \"HIGH|MEDIUM|LOW\",\n" +
+            "    \"majorCategory\": \"기획수정|신기능|오류수정\"\n" +
             "  }\n" +
             "]";
     private static final DateTimeFormatter FILE_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
@@ -217,6 +227,8 @@ public class LlmChangeEventEnhancerService {
                         .confidenceScore(original.getConfidenceScore())
                         .sourceType(original.getSourceType())
                         .correlationKey(original.getCorrelationKey())
+                        .majorCategory(VALID_MAJOR_CATEGORIES.contains(dto.getMajorCategory())
+                                ? dto.getMajorCategory() : null)
                         .build());
                 enhancedCount++;
             } else {
@@ -254,6 +266,8 @@ public class LlmChangeEventEnhancerService {
     /**
      * LLM 응답을 역직렬화하기 위한 내부 DTO
      */
+    private static final Set<String> VALID_MAJOR_CATEGORIES = Set.of("기획수정", "신기능", "오류수정");
+
     @Getter
     @Setter
     @NoArgsConstructor
@@ -262,5 +276,6 @@ public class LlmChangeEventEnhancerService {
         private String title;
         private String description;
         private String severity;
+        private String majorCategory;
     }
 }

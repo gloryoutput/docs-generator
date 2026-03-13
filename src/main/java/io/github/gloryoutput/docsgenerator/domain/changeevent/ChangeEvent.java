@@ -43,11 +43,14 @@ public class ChangeEvent extends BaseEntity {
     private String sourceType;
     @Column(name = "correlation_key")
     private String correlationKey;
+    /** 대분류 (기획수정, 신기능, 오류수정) - LLM 또는 키워드 기반으로 분류 */
+    @Column(name = "major_category")
+    private String majorCategory;
 
     @Builder
     public ChangeEvent(UUID idAnalysisRequest, UUID idProject, String category, String title,
                        String description, String severity, Double confidenceScore,
-                       String sourceType, String correlationKey) {
+                       String sourceType, String correlationKey, String majorCategory) {
         this.idChangeEvent = UUID.randomUUID();
         this.idAnalysisRequest = idAnalysisRequest;
         this.idProject = idProject;
@@ -58,5 +61,6 @@ public class ChangeEvent extends BaseEntity {
         this.confidenceScore = confidenceScore;
         this.sourceType = sourceType;
         this.correlationKey = correlationKey;
+        this.majorCategory = majorCategory;
     }
 }
