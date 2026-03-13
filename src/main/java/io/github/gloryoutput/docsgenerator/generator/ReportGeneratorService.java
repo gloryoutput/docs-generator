@@ -587,6 +587,8 @@ public class ReportGeneratorService {
      * 2. **선수 평가**
      *    - 평가 이력 조회 및 비교 기능 추가</p>
      */
+    /** 카테고리당 최대 출력 항목 수 */
+    private static final int MAX_ITEMS_PER_CATEGORY = 5;
     private void appendGroupedEventItems(StringBuilder sb, List<ChangeEvent> events, String indent) {
         // 모든 이벤트의 description에서 [카테고리]별로 항목을 수집
         Map<String, List<String>> categoryGroups = new LinkedHashMap<>();
@@ -606,15 +608,101 @@ public class ReportGeneratorService {
             }
         }
         if (categoryGroups.isEmpty()) return;
+        // 유사 카테고리 병합 (핵심 키워드를 공유하는 카테고리를 통합)
+        categoryGroups = mergeSimilarCategories(categoryGroups);
+        // 소규모 카테고리(항목 0~1개)를 인접 카테고리에 흡수
+        categoryGroups = absorbSmallCategories(categoryGroups);
         int idx = 1;
         for (Map.Entry<String, List<String>> entry : categoryGroups.entrySet()) {
             String groupTitle = entry.getKey();
             List<String> details = entry.getValue().stream().distinct().toList();
             sb.append(indent).append(idx++).append(". **").append(groupTitle).append("**\n");
-            for (String detail : details) {
-                sb.append(indent).append("   - ").append(detail).append("\n");
+            int displayCount = Math.min(details.size(), MAX_ITEMS_PER_CATEGORY);
+            for (int i = 0; i < displayCount; i++) {
+                sb.append(indent).append("   - ").append(details.get(i)).append("\n");
+            }
+            if (details.size() > MAX_ITEMS_PER_CATEGORY) {
+                sb.append(indent).append("   - 외 ").append(details.size() - MAX_ITEMS_PER_CATEGORY).append("건\n");
             }
         }
+    }
+    /**
+     * 핵심 키워드를 공유하는 유사 카테고리를 병합합니다.
+     *
+     * <p>카테고리명에서 핵심 키워드(한국어 2자 이상 단어)를 추출하고,
+     * 같은 핵심 키워드를 공유하는 카테고리를 하나로 통합합니다.
+     * 예: "스카우트 관리", "스카우트 날씨", "스카우트 후보" → "스카우트 관리"</p>
+     */
+    private Map<String, List<String>> mergeSimilarCategories(Map<String, List<String>> categoryGroups) {
+        if (categoryGroups.size() <= 1) return categoryGroups;
+        // 각 카테고리에서 대표 키워드(첫 번째 한국어 2자+ 단어) 추출
+        Map<String, String> categoryToKeyword = new LinkedHashMap<>();
+        for (String category : categoryGroups.keySet()) {
+            categoryToKeyword.put(category, extractPrimaryKeyword(category));
+        }
+        // 같은 대표 키워드를 가진 카테고리를 병합
+        Map<String, List<String>> merged = new LinkedHashMap<>();
+        Map<String, String> keywordToMergedName = new LinkedHashMap<>();
+        for (Map.Entry<String, List<String>> entry : categoryGroups.entrySet()) {
+            String category = entry.getKey();
+            String keyword = categoryToKeyword.get(category);
+            // 이미 같은 키워드 그룹이 있으면 병합, 없으면 새 그룹 생성
+            String mergedName = keywordToMergedName.get(keyword);
+            if (mergedName == null) {
+                mergedName = category;
+                keywordToMergedName.put(keyword, mergedName);
+            }
+            merged.computeIfAbsent(mergedName, k -> new ArrayList<>()).addAll(entry.getValue());
+        }
+        return merged;
+    }
+    /**
+     * 카테고리명에서 대표 키워드를 추출합니다.
+     *
+     * <p>한국어 2자 이상의 첫 번째 단어를 대표 키워드로 사용합니다.
+     * 한국어 단어가 없으면 원본 카테고리명 전체를 키워드로 사용합니다.</p>
+     */
+    private String extractPrimaryKeyword(String category) {
+        for (String word : category.split("\\s+")) {
+            if (word.matches("[가-힣]{2,}")) {
+                return word;
+            }
+        }
+        return category;
+    }
+    /**
+     * 항목이 0~1개인 소규모 카테고리를 가장 가까운 카테고리에 흡수합니다.
+     *
+     * <p>항목이 거의 없는 카테고리는 독립적으로 표시하기보다
+     * 다른 카테고리에 병합하여 출력을 간결하게 만듭니다.</p>
+     */
+    private Map<String, List<String>> absorbSmallCategories(Map<String, List<String>> categoryGroups) {
+        if (categoryGroups.size() <= 2) return categoryGroups;
+        Map<String, List<String>> large = new LinkedHashMap<>();
+        List<Map.Entry<String, List<String>>> small = new ArrayList<>();
+        for (Map.Entry<String, List<String>> entry : categoryGroups.entrySet()) {
+            if (entry.getValue().size() <= 1) {
+                small.add(entry);
+            } else {
+                large.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+            }
+        }
+        if (small.isEmpty() || large.isEmpty()) return categoryGroups;
+        // 소규모 카테고리의 항목을 가장 큰 카테고리에 흡수
+        String largestCategory = large.entrySet().stream()
+                .max(Comparator.comparingInt(e -> e.getValue().size()))
+                .map(Map.Entry::getKey)
+                .orElse(null);
+        if (largestCategory == null) return categoryGroups;
+        for (Map.Entry<String, List<String>> smallEntry : small) {
+            // 카테고리 제목 자체를 항목으로 추가 (항목이 없는 경우)
+            if (smallEntry.getValue().isEmpty()) {
+                large.get(largestCategory).add(smallEntry.getKey());
+            } else {
+                large.get(largestCategory).addAll(smallEntry.getValue());
+            }
+        }
+        return large;
     }
     /**
      * 이벤트 description에서 [카테고리]별 항목 그룹을 추출합니다.
