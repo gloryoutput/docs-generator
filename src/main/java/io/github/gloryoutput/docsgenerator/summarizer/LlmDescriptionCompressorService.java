@@ -36,12 +36,7 @@ public class LlmDescriptionCompressorService {
             "당신은 IT 변경 보고서 작성 전문가입니다.\n" +
             "아래 '기능별 변경 내용'은 여러 파일을 수정하여 발생한 변경 사항을 기능별로 정리한 것입니다.\n" +
             "이것을 비개발자(경영진, 고객사)가 읽을 보고서에 들어갈 **구체적 변경 요약**으로 압축해 주세요.\n\n" +
-            "## 핵심 원칙: 구체적 대상이 드러나는 서술\n" +
-            "- '무엇이 어떻게 변경되었는지' 구체적 대상을 반드시 포함하세요.\n" +
-            "- 대상 없이 액션만 서술하는 제네릭 문장을 절대 사용하지 마세요.\n" +
-            "- 나쁜 예: '관리 기능 추가', '업무 지원을 위한 기능 추가', '기능 개선' (대상 없음)\n" +
-            "- 좋은 예: '날씨 조회 기능 추가', '후보 선수 평가 정보 관리 항목 확장' (구체적 대상 있음)\n" +
-            "- '~하기 위한', '~할 수 있도록', '효율화를 위한' 같은 의미 없는 목적 수식어를 붙이지 마세요.\n\n" +
+            LlmPromptConstants.CONCRETE_SUBJECT_RULE + "\n" +
             "## 메뉴 기준 그룹핑\n" +
             "같은 메뉴에 속하는 하위 기능들은 반드시 하나의 카테고리로 통합하세요.\n" +
             "하위 기능은 상위 기능의 맥락에서 서술하고, 독립 카테고리로 분리하지 마세요.\n\n" +
@@ -50,12 +45,12 @@ public class LlmDescriptionCompressorService {
             "2. 기술 용어(Repository, Service, Controller, Entity, 필드, 메서드 등)를 사용하지 마세요\n" +
             "3. 파일명, 클래스명, 패키지 경로를 언급하지 마세요\n" +
             "4. 카테고리명은 비개발자가 이해할 수 있는 업무 관점의 한국어 이름으로 변환하세요\n" +
-            "   예: 'scout' → '스카우트 관리', 'evaluation' → '선수 평가', 'weather' → '날씨 정보'\n" +
+            "   영문 키워드를 해당 프로젝트의 업무 맥락에 맞는 한국어 메뉴/기능명으로 변환하세요\n" +
             "5. 항목이 모두 다른 카테고리에 병합되어 비게 된 카테고리는 제외하세요\n" +
             "6. 같은 문장 패턴에서 일부만 다른 항목은 쉼표로 병합하세요.\n" +
             "   예: '날씨 필드 추가' + '점수 필드 추가' → '날씨, 점수 필드 추가'\n" +
             "7. 같은 대상에 대한 세부 변경(필드 추가, 옵션 변경, 데이터 분리 등)은 의도 단위로 통합하세요.\n" +
-            "   예: '날씨 필드 추가' + '보조 포지션 선택 기능' + '소속 분리' → '영입후보 관리 항목 추가'\n" +
+            "   개별 필드나 옵션을 나열하지 말고, 해당 변경의 상위 의도로 한 문장에 압축하세요.\n" +
             "   개별 필드나 옵션을 나열하지 말고, 해당 변경의 상위 의도로 한 문장에 압축하세요.\n\n" +
             "## 응답 형식\n" +
             "반드시 아래 JSON 객체 형식으로만 응답하세요. 다른 텍스트를 포함하지 마세요.\n" +
@@ -89,17 +84,17 @@ public class LlmDescriptionCompressorService {
      * "기타 기능"으로 통합 시 키워드 접두사를 제거합니다.</p>
      */
     private static final Set<String> KNOWN_DOMAIN_KEYWORDS = Set.of(
-            "scout", "player", "team", "match", "league", "season",
-            "evaluation", "observation", "assessment", "candidate",
-            "position", "transfer", "contract", "salary", "agent",
             "schedule", "event", "note", "tag", "category", "priority",
             "report", "document", "template", "notification", "message",
             "comment", "user", "member", "admin", "role", "permission",
             "auth", "profile", "setting", "config", "dashboard",
             "statistics", "summary", "history", "log", "record",
             "status", "type", "level", "content", "block", "page",
-            "image", "file", "attachment", "weather", "google",
-            "project", "task", "issue", "customer", "client", "company"
+            "image", "file", "attachment", "google",
+            "project", "task", "issue", "customer", "client", "company",
+            "order", "product", "inventory", "payment", "invoice",
+            "board", "post", "reply", "menu", "form", "search",
+            "approval", "workflow", "batch", "import", "export"
     );
     /**
      * 키워드 → 한국어 메뉴/기능명 번역 맵
@@ -109,15 +104,7 @@ public class LlmDescriptionCompressorService {
      * "기타 기능"으로 통합됩니다.</p>
      */
     private static final Map<String, String> KEYWORD_TRANSLATIONS = Map.ofEntries(
-            Map.entry("scout", "스카우트"), Map.entry("player", "선수"),
-            Map.entry("team", "팀"), Map.entry("match", "경기"),
-            Map.entry("league", "리그"), Map.entry("season", "시즌"),
-            Map.entry("evaluation", "평가"), Map.entry("observation", "관찰"),
-            Map.entry("assessment", "평가"), Map.entry("candidate", "후보"),
-            Map.entry("position", "포지션"), Map.entry("transfer", "이적"),
-            Map.entry("contract", "계약"), Map.entry("salary", "급여"),
-            Map.entry("agent", "에이전트"), Map.entry("schedule", "일정"),
-            Map.entry("weather", "날씨"), Map.entry("event", "이벤트"),
+            Map.entry("schedule", "일정"), Map.entry("event", "이벤트"),
             Map.entry("note", "메모"), Map.entry("tag", "태그"),
             Map.entry("category", "카테고리"), Map.entry("priority", "우선순위"),
             Map.entry("report", "보고서"), Map.entry("document", "문서"),
@@ -131,7 +118,15 @@ public class LlmDescriptionCompressorService {
             Map.entry("statistics", "통계"), Map.entry("history", "이력"),
             Map.entry("content", "콘텐츠"), Map.entry("google", "Google 연동"),
             Map.entry("project", "프로젝트"), Map.entry("task", "작업"),
-            Map.entry("customer", "고객"), Map.entry("client", "클라이언트")
+            Map.entry("customer", "고객"), Map.entry("client", "클라이언트"),
+            Map.entry("order", "주문"), Map.entry("product", "상품"),
+            Map.entry("inventory", "재고"), Map.entry("payment", "결제"),
+            Map.entry("invoice", "청구서"), Map.entry("board", "게시판"),
+            Map.entry("post", "게시글"), Map.entry("menu", "메뉴"),
+            Map.entry("form", "양식"), Map.entry("search", "검색"),
+            Map.entry("approval", "승인"), Map.entry("workflow", "업무흐름"),
+            Map.entry("batch", "일괄처리"), Map.entry("import", "가져오기"),
+            Map.entry("export", "내보내기")
     );
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
