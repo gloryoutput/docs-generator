@@ -38,6 +38,8 @@ public class ClientReport extends BaseEntity {
     private String documentNames;
     @Column(name = "chat_file_name")
     private String chatFileName;
+    @Column(name = "source_urls", columnDefinition = "TEXT")
+    private String sourceUrls;
     @Column(name = "report_content", nullable = false, columnDefinition = "LONGTEXT")
     private String reportContent;
     @Column(name = "generated_at", nullable = false)
@@ -46,7 +48,7 @@ public class ClientReport extends BaseEntity {
     @Builder
     public ClientReport(UUID idProject, LocalDate startDate, LocalDate endDate,
                         String requestedBy, String documentNames,
-                        String chatFileName, String reportContent) {
+                        String chatFileName, String sourceUrls, String reportContent) {
         this.idClientReport = UUID.randomUUID();
         this.idProject = idProject;
         this.startDate = startDate;
@@ -54,6 +56,7 @@ public class ClientReport extends BaseEntity {
         this.requestedBy = requestedBy;
         this.documentNames = documentNames;
         this.chatFileName = chatFileName;
+        this.sourceUrls = sourceUrls;
         this.reportContent = reportContent;
         this.generatedAt = LocalDateTime.now();
     }

@@ -53,20 +53,22 @@ public class ClientReportController {
      * @param requestedBy 요청자
      * @param systemDocumentsPath 시스템 문서가 위치한 로컬 디렉토리 경로
      * @param chatFile 카카오톡 대화 txt 파일
+     * @param urls 참고할 웹페이지 URL 목록
      * @return 생성된 보고서
      */
     @PostMapping(consumes = "multipart/form-data")
     @Operation(summary = "클라이언트 보고서 생성",
-            description = "로컬 디렉토리 경로의 시스템 문서와 카카오톡 대화 txt 파일을 기반으로 LLM 보고서를 생성합니다")
+            description = "로컬 디렉토리 경로의 시스템 문서, 카카오톡 대화 txt 파일, 웹페이지 URL을 기반으로 LLM 보고서를 생성합니다")
     public ApiResponse<ClientReportResponse> generate(
             @RequestParam String idProject,
             @RequestParam(required = false) LocalDate startDate,
             @RequestParam(required = false) LocalDate endDate,
             @RequestParam(required = false) String requestedBy,
             @RequestParam(required = false) String systemDocumentsPath,
-            @RequestPart(value = "chatFile", required = false) MultipartFile chatFile) {
+            @RequestPart(value = "chatFile", required = false) MultipartFile chatFile,
+            @RequestParam(required = false) List<String> urls) {
         return ApiResponse.ok(clientReportService.generate(idProject, startDate, endDate,
-                requestedBy, systemDocumentsPath, chatFile));
+                requestedBy, systemDocumentsPath, chatFile, urls));
     }
 
     /**

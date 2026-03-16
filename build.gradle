@@ -30,6 +30,7 @@ dependencies {
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.2'
     implementation 'org.apache.poi:poi-ooxml:5.3.0'
     implementation 'org.eclipse.jgit:org.eclipse.jgit:7.1.0.202411261347-r'
+    implementation 'org.jsoup:jsoup:1.18.3'
     runtimeOnly 'com.mysql:mysql-connector-j'
     implementation 'com.h2database:h2'
     compileOnly 'org.projectlombok:lombok'

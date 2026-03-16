@@ -22,6 +22,7 @@ public class ClientReportResponse {
     private String requestedBy;
     private String documentNames;
     private String chatFileName;
+    private String sourceUrls;
     private String reportContent;
     private LocalDateTime generatedAt;
 
@@ -40,6 +41,7 @@ public class ClientReportResponse {
                 .requestedBy(entity.getRequestedBy())
                 .documentNames(entity.getDocumentNames())
                 .chatFileName(entity.getChatFileName())
+                .sourceUrls(entity.getSourceUrls())
                 .reportContent(entity.getReportContent())
                 .generatedAt(entity.getGeneratedAt())
                 .build();

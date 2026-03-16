@@ -40,6 +40,7 @@ public class DataInitializer implements ApplicationRunner {
     @Transactional
     public void run(ApplicationArguments args) {
         initDolbomProject();
+        initKohyoungProject();
     }
 
     private void initDolbomProject() {
@@ -86,6 +87,20 @@ public class DataInitializer implements ApplicationRunner {
         }
     }
 
+    private void initKohyoungProject() {
+        if (projectCodeRepository.findByProjectCode("kohyoung").isPresent()) {
+            log.info("kohyoung 프로젝트가 이미 존재합니다 - 초기화 스킵");
+            return;
+        }
+        ProjectCode projectCode = projectCodeRepository.save(
+                ProjectCode.builder().projectCode("kohyoung").build());
+        Project project = projectRepository.save(
+                Project.builder()
+                        .idProjectCode(projectCode.getIdProjectCode())
+                        .projectName("kohyoung")
+                        .build());
+        log.info("kohyoung 프로젝트 생성 완료 (ID: {})", project.getIdProject());
+    }
     /**
      * 기존 활성 credential 중 PERSONAL_ACCESS_TOKEN 타입을 찾습니다.
      */

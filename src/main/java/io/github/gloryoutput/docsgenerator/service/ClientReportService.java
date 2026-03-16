@@ -9,6 +9,10 @@ import io.github.gloryoutput.docsgenerator.summarizer.LlmClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.File;
 import java.io.IOException;
@@ -64,18 +68,20 @@ public class ClientReportService {
         }
     }
 
+    private static final int URL_TIMEOUT_MS = 15000;
     /**
-     * 로컬 디렉토리의 시스템 문서와 카카오톡 대화 파일을 기반으로 보고서를 생성합니다.
+     * 로컬 디렉토리의 시스템 문서, 카카오톡 대화 파일, 웹페이지 URL을 기반으로 보고서를 생성합니다.
      *
      * @param idProject 프로젝트 ID
      * @param requestedBy 요청자
      * @param systemDocumentsPath 시스템 문서가 위치한 로컬 디렉토리 경로
      * @param chatFile 카카오톡 대화 txt 파일
+     * @param urls 참고할 웹페이지 URL 목록
      * @return 생성된 보고서 응답
      */
     public ClientReportResponse generate(String idProject, LocalDate startDate, LocalDate endDate,
                                          String requestedBy, String systemDocumentsPath,
-                                         MultipartFile chatFile) {
+                                         MultipartFile chatFile, List<String> urls) {
         UUID projectId = UUID.fromString(idProject);
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("프로젝트를 찾을 수 없습니다: " + idProject));
@@ -101,8 +107,15 @@ public class ClientReportService {
             chatFileName = chatFile.getOriginalFilename();
             chatContent = readMultipartFile(chatFile);
         }
+        // 웹페이지 URL 크롤링
+        String urlContent = "";
+        String urlsJoined = "";
+        if (urls != null && !urls.isEmpty()) {
+            urlsJoined = String.join(", ", urls);
+            urlContent = fetchUrlContents(urls);
+        }
         // 분석 자료 구성
-        String sourceData = buildSourceData(docsContent.toString(), chatContent);
+        String sourceData = buildSourceData(docsContent.toString(), chatContent, urlContent);
         // 섹션별 LLM 호출로 보고서 생성
         String reportContent = generateReport(project.getProjectName(), startDate, endDate, sourceData);
         // 엔티티 저장
@@ -113,6 +126,7 @@ public class ClientReportService {
                 .requestedBy(requestedBy)
                 .documentNames(docNames.toString())
                 .chatFileName(chatFileName)
+                .sourceUrls(urlsJoined)
                 .reportContent(reportContent)
                 .build();
         clientReportRepository.save(entity);
@@ -276,9 +290,9 @@ public class ClientReportService {
     }
 
     /**
-     * 분석 자료(시스템 문서 + 카톡 대화)를 구성합니다.
+     * 분석 자료(시스템 문서 + 카톡 대화 + 웹페이지)를 구성합니다.
      */
-    private String buildSourceData(String docsContent, String chatContent) {
+    private String buildSourceData(String docsContent, String chatContent, String urlContent) {
         StringBuilder sb = new StringBuilder();
         if (!docsContent.isEmpty()) {
             sb.append("## [분석 자료] 시스템 기능 문서\n\n");
@@ -290,7 +304,176 @@ public class ClientReportService {
             sb.append(truncateIfNeeded(chatContent, MAX_CONTENT_CHARS));
             sb.append("\n\n");
         }
+        if (!urlContent.isEmpty()) {
+            sb.append("## [분석 자료] 웹페이지 내용\n\n");
+            sb.append(truncateIfNeeded(urlContent, MAX_CONTENT_CHARS));
+            sb.append("\n\n");
+        }
         return sb.toString();
+    }
+    /** WordPress/Elementor 등 CMS 노이즈 요소 CSS 셀렉터 */
+    private static final String CMS_NOISE_SELECTORS = String.join(", ",
+            // 공통 제거 대상
+            "script", "style", "iframe", "noscript", "svg",
+            // WordPress 전용
+            "#wpadminbar", ".wp-block-spacer",
+            // Elementor 전용
+            ".elementor-location-popup", ".dialog-widget",
+            // 쿠키/팝업/오버레이
+            "[class*=cookie]", "[id*=cookie]",
+            "[class*=consent]", "[id*=consent]",
+            "[class*=popup]", "[class*=modal]", "[class*=overlay]",
+            // 네비게이션/푸터/사이드바
+            "nav", "footer", "header", "aside",
+            "[role=navigation]", "[role=banner]", "[role=contentinfo]",
+            // 숨겨진 요소
+            "[aria-hidden=true]", ".screen-reader-text", ".sr-only",
+            "[style*='display:none']", "[style*='display: none']"
+    );
+    /**
+     * 여러 URL의 웹페이지를 크롤링하여 구조화된 텍스트 콘텐츠를 추출합니다.
+     *
+     * <p>WordPress, Elementor 등 CMS 기반 사이트에서도 의미 있는 콘텐츠를 추출할 수 있도록
+     * CMS 노이즈 요소를 제거하고, HTML 구조를 마크다운 형식으로 변환합니다.</p>
+     *
+     * @param urls 크롤링할 URL 목록
+     * @return 추출된 웹페이지 텍스트 (URL별로 구분, 마크다운 형식)
+     */
+    private String fetchUrlContents(List<String> urls) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < urls.size(); i++) {
+            String url = urls.get(i).trim();
+            if (url.isEmpty()) continue;
+            log.info("웹페이지 크롤링 중 [{}/{}]: {}", i + 1, urls.size(), url);
+            sb.append("### 웹페이지: ").append(url).append("\n\n");
+            try {
+                Document doc = Jsoup.connect(url)
+                        .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+                        .header("Accept", "text/html,application/xhtml+xml")
+                        .header("Accept-Language", "ko-KR,ko;q=0.9,en;q=0.8")
+                        .timeout(URL_TIMEOUT_MS)
+                        .maxBodySize(5 * 1024 * 1024)
+                        .followRedirects(true)
+                        .get();
+                // 메타 정보 추출
+                sb.append(extractMetaInfo(doc));
+                // CMS 노이즈 요소 제거
+                doc.select(CMS_NOISE_SELECTORS).remove();
+                // HTML → 구조화된 마크다운 변환
+                String structured = convertToStructuredText(doc);
+                sb.append(structured).append("\n\n");
+                log.info("웹페이지 크롤링 완료: {} ({}자)", url, structured.length());
+            } catch (IOException e) {
+                log.warn("웹페이지 크롤링 실패: {} - {}", url, e.getMessage());
+                sb.append("(크롤링 실패: ").append(e.getMessage()).append(")\n\n");
+            }
+        }
+        return sb.toString();
+    }
+    /**
+     * HTML 문서에서 메타 정보(제목, 설명, OG 태그)를 추출합니다.
+     */
+    private String extractMetaInfo(Document doc) {
+        StringBuilder meta = new StringBuilder();
+        String title = doc.title();
+        if (!title.isEmpty()) {
+            meta.append("제목: ").append(title).append("\n");
+        }
+        // meta description
+        String desc = doc.select("meta[name=description]").attr("content");
+        if (desc.isEmpty()) {
+            desc = doc.select("meta[property=og:description]").attr("content");
+        }
+        if (!desc.isEmpty()) {
+            meta.append("설명: ").append(desc).append("\n");
+        }
+        // OG 태그에서 추가 정보 추출
+        String ogSiteName = doc.select("meta[property=og:site_name]").attr("content");
+        if (!ogSiteName.isEmpty()) {
+            meta.append("사이트명: ").append(ogSiteName).append("\n");
+        }
+        String ogType = doc.select("meta[property=og:type]").attr("content");
+        if (!ogType.isEmpty()) {
+            meta.append("페이지 유형: ").append(ogType).append("\n");
+        }
+        // keywords
+        String keywords = doc.select("meta[name=keywords]").attr("content");
+        if (!keywords.isEmpty()) {
+            meta.append("키워드: ").append(keywords).append("\n");
+        }
+        if (meta.length() > 0) {
+            meta.append("\n");
+        }
+        return meta.toString();
+    }
+    /**
+     * HTML 본문을 구조를 보존한 마크다운 형식 텍스트로 변환합니다.
+     *
+     * <p>제목(h1~h6), 단락(p), 목록(ul/ol), 테이블, 이미지 alt 텍스트 등
+     * 주요 HTML 요소를 마크다운으로 변환하여 LLM이 구조를 이해할 수 있도록 합니다.</p>
+     */
+    private String convertToStructuredText(Document doc) {
+        if (doc.body() == null) return "";
+        StringBuilder sb = new StringBuilder();
+        // Elementor 위젯 내부 또는 일반 본문에서 주요 콘텐츠 요소 순회
+        Elements contentElements = doc.body().select("h1, h2, h3, h4, h5, h6, p, li, td, th, " +
+                "figcaption, blockquote, [class*=text-editor], [class*=heading-title]");
+        String prevTag = "";
+        for (Element el : contentElements) {
+            // 부모가 이미 처리된 요소 내부의 중복 방지 (li 안의 p 등)
+            if ("p".equals(el.tagName()) && el.parent() != null && "li".equals(el.parent().tagName())) {
+                continue;
+            }
+            String text = el.ownText().trim();
+            // 자식 텍스트도 포함 (Elementor 위젯처럼 깊은 중첩 구조)
+            if (text.isEmpty()) {
+                text = el.text().trim();
+            }
+            if (text.isEmpty() || text.length() < 2) continue;
+            String tag = el.tagName();
+            switch (tag) {
+                case "h1" -> sb.append("\n# ").append(text).append("\n");
+                case "h2" -> sb.append("\n## ").append(text).append("\n");
+                case "h3" -> sb.append("\n### ").append(text).append("\n");
+                case "h4" -> sb.append("\n#### ").append(text).append("\n");
+                case "h5", "h6" -> sb.append("\n##### ").append(text).append("\n");
+                case "li" -> sb.append("- ").append(text).append("\n");
+                case "th" -> sb.append("| ").append(text).append(" ");
+                case "td" -> sb.append("| ").append(text).append(" ");
+                case "blockquote" -> sb.append("> ").append(text).append("\n");
+                default -> {
+                    // p, figcaption, Elementor 텍스트 위젯 등
+                    if (!tag.equals(prevTag) || !"p".equals(tag)) {
+                        sb.append("\n");
+                    }
+                    sb.append(text).append("\n");
+                }
+            }
+            // 테이블 행 끝 처리
+            if ("th".equals(tag) || "td".equals(tag)) {
+                Element nextSibling = el.nextElementSibling();
+                if (nextSibling == null || (!nextSibling.tagName().equals("th") && !nextSibling.tagName().equals("td"))) {
+                    sb.append("|\n");
+                }
+            }
+            prevTag = tag;
+        }
+        // 이미지 alt 텍스트 추출 (콘텐츠 이해에 유용)
+        Elements images = doc.body().select("img[alt]");
+        StringBuilder imgDescs = new StringBuilder();
+        for (Element img : images) {
+            String alt = img.attr("alt").trim();
+            if (!alt.isEmpty() && alt.length() > 3) {
+                imgDescs.append("- [이미지] ").append(alt).append("\n");
+            }
+        }
+        if (imgDescs.length() > 0) {
+            sb.append("\n#### 이미지 설명\n");
+            sb.append(imgDescs);
+        }
+        // 연속 빈 줄 정리
+        return sb.toString().replaceAll("\n{3,}", "\n\n").trim();
     }
 
     /**
