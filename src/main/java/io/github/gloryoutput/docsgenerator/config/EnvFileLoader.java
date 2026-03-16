@@ -35,8 +35,10 @@ public class EnvFileLoader implements EnvironmentPostProcessor {
     }
 
     private void loadEnvFile(ConfigurableEnvironment environment, String fileName) {
-        Path envPath = Path.of(fileName);
+        Path envPath = Path.of(fileName).toAbsolutePath();
+        System.out.println("[EnvFileLoader] 파일 탐색: " + envPath);
         if (!Files.exists(envPath)) {
+            System.out.println("[EnvFileLoader] 파일 없음: " + envPath);
             return;
         }
         try {
@@ -55,8 +57,9 @@ public class EnvFileLoader implements EnvironmentPostProcessor {
                 }
             });
             if (!properties.isEmpty()) {
+                System.out.println("[EnvFileLoader] " + fileName + " 로드 완료 - keys: " + properties.keySet());
                 environment.getPropertySources()
-                        .addLast(new MapPropertySource("envFile-" + fileName, properties));
+                        .addFirst(new MapPropertySource("envFile-" + fileName, properties));
             }
         } catch (IOException e) {
             // .env 파일 로드 실패 시 무시 (선택적 설정)

@@ -7,7 +7,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.gloryoutput.docsgenerator.summarizer.LlmClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
+import java.time.Duration;
 
 /**
  * Ollama OpenAI 호환 API를 사용하는 LlmClient 구현체
@@ -22,16 +24,24 @@ import org.springframework.web.client.RestClient;
 @Slf4j
 public class OllamaLlmClient implements LlmClient {
     private static final double TEMPERATURE = 0.3;
+    /** deepseek-r1 등 대형 프롬프트 처리를 위한 컨텍스트 윈도우 크기 */
+    private static final int NUM_CTX = 32768;
+    /** LLM 응답 대기 타임아웃 (10분) */
+    private static final Duration READ_TIMEOUT = Duration.ofMinutes(10);
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final String model;
     private final RestClient restClient;
 
     public OllamaLlmClient(String apiUrl, String model) {
         this.model = model;
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setReadTimeout(READ_TIMEOUT);
         this.restClient = RestClient.builder()
                 .baseUrl(apiUrl)
+                .requestFactory(factory)
                 .build();
-        log.info("Ollama LLM Client 초기화 완료 - model: {}, api-url: {}", model, apiUrl);
+        log.info("Ollama LLM Client 초기화 완료 - model: {}, api-url: {}, num_ctx: {}, timeout: {}",
+                model, apiUrl, NUM_CTX, READ_TIMEOUT);
     }
 
     /**
@@ -64,6 +74,8 @@ public class OllamaLlmClient implements LlmClient {
         ObjectNode root = objectMapper.createObjectNode();
         root.put("model", model);
         root.put("temperature", TEMPERATURE);
+        ObjectNode options = root.putObject("options");
+        options.put("num_ctx", NUM_CTX);
         ArrayNode messages = root.putArray("messages");
         ObjectNode systemMsg = messages.addObject();
         systemMsg.put("role", "system");
