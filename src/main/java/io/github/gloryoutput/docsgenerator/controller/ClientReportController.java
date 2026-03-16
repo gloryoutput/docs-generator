@@ -19,6 +19,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -47,6 +48,8 @@ public class ClientReportController {
      * 로컬 시스템 문서 경로와 카카오톡 대화 파일을 기반으로 보고서를 생성합니다.
      *
      * @param idProject 프로젝트 ID
+     * @param startDate 보고 시작일 (yyyy-MM-dd)
+     * @param endDate 보고 종료일 (yyyy-MM-dd)
      * @param requestedBy 요청자
      * @param systemDocumentsPath 시스템 문서가 위치한 로컬 디렉토리 경로
      * @param chatFile 카카오톡 대화 txt 파일
@@ -57,11 +60,13 @@ public class ClientReportController {
             description = "로컬 디렉토리 경로의 시스템 문서와 카카오톡 대화 txt 파일을 기반으로 LLM 보고서를 생성합니다")
     public ApiResponse<ClientReportResponse> generate(
             @RequestParam String idProject,
+            @RequestParam(required = false) LocalDate startDate,
+            @RequestParam(required = false) LocalDate endDate,
             @RequestParam(required = false) String requestedBy,
-            @RequestParam String systemDocumentsPath,
-            @RequestPart(value = "chatFile") MultipartFile chatFile) {
-        return ApiResponse.ok(clientReportService.generate(idProject, requestedBy,
-                systemDocumentsPath, chatFile));
+            @RequestParam(required = false) String systemDocumentsPath,
+            @RequestPart(value = "chatFile", required = false) MultipartFile chatFile) {
+        return ApiResponse.ok(clientReportService.generate(idProject, startDate, endDate,
+                requestedBy, systemDocumentsPath, chatFile));
     }
 
     /**

@@ -3,6 +3,7 @@ package io.github.gloryoutput.docsgenerator.dto.response;
 import io.github.gloryoutput.docsgenerator.domain.clientreport.ClientReport;
 import lombok.Builder;
 import lombok.Getter;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
@@ -16,6 +17,8 @@ import java.time.LocalDateTime;
 public class ClientReportResponse {
     private String idClientReport;
     private String idProject;
+    private LocalDate startDate;
+    private LocalDate endDate;
     private String requestedBy;
     private String documentNames;
     private String chatFileName;
@@ -32,6 +35,8 @@ public class ClientReportResponse {
         return ClientReportResponse.builder()
                 .idClientReport(entity.getIdClientReport().toString())
                 .idProject(entity.getIdProject().toString())
+                .startDate(entity.getStartDate())
+                .endDate(entity.getEndDate())
                 .requestedBy(entity.getRequestedBy())
                 .documentNames(entity.getDocumentNames())
                 .chatFileName(entity.getChatFileName())

@@ -14,6 +14,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
@@ -72,8 +73,8 @@ public class ClientReportService {
      * @param chatFile 카카오톡 대화 txt 파일
      * @return 생성된 보고서 응답
      */
-    public ClientReportResponse generate(String idProject, String requestedBy,
-                                         String systemDocumentsPath,
+    public ClientReportResponse generate(String idProject, LocalDate startDate, LocalDate endDate,
+                                         String requestedBy, String systemDocumentsPath,
                                          MultipartFile chatFile) {
         UUID projectId = UUID.fromString(idProject);
         Project project = projectRepository.findById(projectId)
@@ -81,16 +82,18 @@ public class ClientReportService {
         // 로컬 디렉토리에서 시스템 문서 전체 읽기
         StringBuilder docsContent = new StringBuilder();
         StringBuilder docNames = new StringBuilder();
-        List<File> documentFiles = readLocalDirectory(systemDocumentsPath);
-        for (File file : documentFiles) {
-            String fileName = file.getName();
-            if (docNames.length() > 0) docNames.append(", ");
-            docNames.append(fileName);
-            String content = readLocalFile(file);
-            docsContent.append("## 문서: ").append(fileName).append("\n\n");
-            docsContent.append(content).append("\n\n");
+        if (systemDocumentsPath != null && !systemDocumentsPath.isBlank()) {
+            List<File> documentFiles = readLocalDirectory(systemDocumentsPath);
+            for (File file : documentFiles) {
+                String fileName = file.getName();
+                if (docNames.length() > 0) docNames.append(", ");
+                docNames.append(fileName);
+                String content = readLocalFile(file);
+                docsContent.append("## 문서: ").append(fileName).append("\n\n");
+                docsContent.append(content).append("\n\n");
+            }
+            log.info("시스템 문서 {}건 로드 완료 - path: {}", documentFiles.size(), systemDocumentsPath);
         }
-        log.info("시스템 문서 {}건 로드 완료 - path: {}", documentFiles.size(), systemDocumentsPath);
         // 카카오톡 대화 파싱
         String chatContent = "";
         String chatFileName = "";
@@ -101,10 +104,12 @@ public class ClientReportService {
         // 분석 자료 구성
         String sourceData = buildSourceData(docsContent.toString(), chatContent);
         // 섹션별 LLM 호출로 보고서 생성
-        String reportContent = generateReport(project.getProjectName(), sourceData);
+        String reportContent = generateReport(project.getProjectName(), startDate, endDate, sourceData);
         // 엔티티 저장
         ClientReport entity = ClientReport.builder()
                 .idProject(projectId)
+                .startDate(startDate)
+                .endDate(endDate)
                 .requestedBy(requestedBy)
                 .documentNames(docNames.toString())
                 .chatFileName(chatFileName)
@@ -144,29 +149,48 @@ public class ClientReportService {
      * <p>각 섹션의 ### 제목은 코드가 고정하고, 내용만 LLM이 채웁니다.
      * 이를 통해 원본 보고서(오류 수정 완료 보고서)와 동일한 구조를 보장합니다.</p>
      */
-    private String generateReport(String projectName, String sourceData) {
+    private String generateReport(String projectName, LocalDate startDate, LocalDate endDate,
+                                    String sourceData) {
         if (llmClient == null) {
             throw new IllegalStateException(
                     "LLM이 비활성화되어 보고서를 생성할 수 없습니다. " +
                     "app.llm.enabled=true 설정이 필요합니다.");
         }
         String createdDate = LocalDateTime.now().format(DATE_KR_FORMATTER);
+        String periodStr = (startDate != null && endDate != null)
+                ? startDate + " ~ " + endDate : null;
         StringBuilder report = new StringBuilder();
         report.append("# 소프트웨어 변경 보고서\n\n");
         report.append("작성일자: ").append(createdDate).append("\n\n");
+        report.append("| 항목 | 내용 |\n");
+        report.append("|------|------|\n");
+        report.append("| 프로젝트 | ").append(projectName).append(" |\n");
+        if (periodStr != null) {
+            report.append("| 보고 기간 | ").append(periodStr).append(" |\n");
+        }
+        report.append("\n");
         // 1. 목적
+        String periodCondition = periodStr != null
+                ? "보고 기간: " + periodStr + " (이 기간 내 내용만 포함하세요)\n" : "";
         log.info("[1/6] 목적 섹션 생성 중...");
+        String purposeExample = periodStr != null
+                ? "예: '본 보고서는 " + projectName + "에서 " + periodStr +
+                  " 기간 동안 클라이언트 요청에 따라 수행한 기능 수정, 신규 개발, " +
+                  "오류 수정 작업의 과정과 결과를 정리하기 위해 작성되었습니다.'\n"
+                : "예: '본 보고서는 " + projectName + "에서 클라이언트 요청에 따라 수행한 기능 수정, 신규 개발, " +
+                  "오류 수정 작업의 과정과 결과를 정리하기 위해 작성되었습니다.'\n";
         String purpose = callLlmForSection(projectName, sourceData,
                 "이 보고서의 '목적' 섹션을 작성하세요.\n" +
+                periodCondition +
                 "보고서 작성 배경과 목적을 2~3문장으로 서술합니다.\n" +
-                "예: '본 보고서는 {프로젝트}에서 클라이언트 요청에 따라 수행한 기능 수정, 신규 개발, " +
-                "오류 수정 작업의 과정과 결과를 정리하기 위해 작성되었습니다.'\n" +
+                purposeExample +
                 "전체 요청 건수와 주요 변경 유형(기획수정/신기능/오류수정)별 건수를 포함하세요.");
         report.append("### 목적\n\n").append(purpose).append("\n\n");
         // 2. 발생한 문제
         log.info("[2/6] 발생한 문제 섹션 생성 중...");
         String problems = callLlmForSection(projectName, sourceData,
                 "이 보고서의 '발생한 문제' 섹션을 작성하세요.\n" +
+                periodCondition +
                 "클라이언트가 요청하거나 제보한 사항을 대분류(기획수정/신기능/오류수정)별로 정리합니다.\n" +
                 "각 항목마다:\n" +
                 "- 어떤 기능/화면에서 문제가 있었거나 변경이 필요했는지\n" +
@@ -179,6 +203,7 @@ public class ClientReportService {
         log.info("[3/6] 문제 원인 섹션 생성 중...");
         String causes = callLlmForSection(projectName, sourceData,
                 "이 보고서의 '문제 원인' 섹션을 작성하세요.\n" +
+                periodCondition +
                 "각 주요 항목별로 왜 변경/수정이 필요했는지 원인을 분석합니다.\n" +
                 "형식:\n" +
                 "1. **{기능/화면명}**\n" +
@@ -188,6 +213,7 @@ public class ClientReportService {
         log.info("[4/6] 문제 해결 과정 섹션 생성 중...");
         String process = callLlmForSection(projectName, sourceData,
                 "이 보고서의 '문제 해결 과정' 섹션을 작성하세요.\n" +
+                periodCondition +
                 "실제 수행한 작업을 단계별로 정리합니다.\n" +
                 "형식:\n" +
                 "1. **{기능/화면명} 처리**\n" +
@@ -202,6 +228,7 @@ public class ClientReportService {
         log.info("[5/6] 결과 섹션 생성 중...");
         String results = callLlmForSection(projectName, sourceData,
                 "이 보고서의 '결과' 섹션을 작성하세요.\n" +
+                periodCondition +
                 "완료된 작업을 번호 목록으로 정리합니다.\n" +
                 "형식:\n" +
                 "1. {기능/화면명}: {완료된 내용 요약}\n" +
@@ -211,6 +238,7 @@ public class ClientReportService {
         log.info("[6/6] 개선 및 예방 방안 섹션 생성 중...");
         String improvement = callLlmForSection(projectName, sourceData,
                 "이 보고서의 '개선 및 예방 방안' 섹션을 작성하세요.\n" +
+                periodCondition +
                 "향후 점검이 필요한 사항을 구체적으로 기술합니다.\n" +
                 "형식:\n" +
                 "1. **{제안 제목}**\n" +

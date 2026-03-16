@@ -6,6 +6,7 @@ import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
@@ -27,6 +28,10 @@ public class ClientReport extends BaseEntity {
     private UUID idClientReport;
     @Column(name = "id_project", nullable = false, columnDefinition = "binary(16)")
     private UUID idProject;
+    @Column(name = "start_date")
+    private LocalDate startDate;
+    @Column(name = "end_date")
+    private LocalDate endDate;
     @Column(name = "requested_by")
     private String requestedBy;
     @Column(name = "document_names", columnDefinition = "TEXT")
@@ -39,10 +44,13 @@ public class ClientReport extends BaseEntity {
     private LocalDateTime generatedAt;
 
     @Builder
-    public ClientReport(UUID idProject, String requestedBy, String documentNames,
+    public ClientReport(UUID idProject, LocalDate startDate, LocalDate endDate,
+                        String requestedBy, String documentNames,
                         String chatFileName, String reportContent) {
         this.idClientReport = UUID.randomUUID();
         this.idProject = idProject;
+        this.startDate = startDate;
+        this.endDate = endDate;
         this.requestedBy = requestedBy;
         this.documentNames = documentNames;
         this.chatFileName = chatFileName;
