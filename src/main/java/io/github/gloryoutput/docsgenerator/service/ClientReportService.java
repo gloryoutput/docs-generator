@@ -48,6 +48,7 @@ public class ClientReportService {
             "- 시스템 문서 내용을 그대로 옮기지 마세요.\n" +
             "- 원본에 없는 사실이나 추측을 추가하지 마세요.\n" +
             "- 결과물은 해당 섹션의 본문 내용만 출력하세요. 섹션 제목(###)은 출력하지 마세요.\n" +
+            "- 구분선(---, ===, *** 등)을 사용하지 마세요.\n" +
             "- 부가 설명이나 인사말은 포함하지 마세요.\n";
     private static final int MAX_CONTENT_CHARS = 12000;
     private static final DateTimeFormatter DATE_KR_FORMATTER = DateTimeFormatter.ofPattern("yyyy년 MM월 dd일");
@@ -228,15 +229,14 @@ public class ClientReportService {
         String process = callLlmForSection(projectName, sourceData,
                 "이 보고서의 '문제 해결 과정' 섹션을 작성하세요.\n" +
                 periodCondition +
-                "실제 수행한 작업을 단계별로 정리합니다.\n" +
+                "## 필수 규칙\n" +
+                "- '초기 조사', '요구사항 분석', '현황 파악' 등 조사/분석 단계는 절대 포함하지 마세요. 실제 수행한 조치만 서술.\n" +
+                "- 구분선(---, ===, *** 등)을 사용하지 마세요.\n" +
+                "- 관련 기능끼리 탭(업무 영역) 단위로 묶어서 간결하게 작성하세요.\n" +
+                "- 각 탭 안에서 개별 기능을 하나씩 나열하지 말고, 한 문단으로 통합 서술하세요.\n" +
                 "형식:\n" +
-                "1. **{기능/화면명} 처리**\n" +
-                "   1. 초기 조사\n" +
-                "      - {조사 내용}\n" +
-                "   2. 수정/개발 작업\n" +
-                "      - {작업 내용}\n" +
-                "   3. 테스트 및 확인\n" +
-                "      - {검증 내용}");
+                "1. **{탭/업무 영역명}**\n" +
+                "   {해당 영역에서 수행한 조치를 통합하여 2~3문장으로 서술}");
         report.append("### 문제 해결 과정\n\n").append(process).append("\n\n");
         // 5. 결과
         log.info("[5/6] 결과 섹션 생성 중...");
@@ -253,10 +253,14 @@ public class ClientReportService {
         String improvement = callLlmForSection(projectName, sourceData,
                 "이 보고서의 '개선 및 예방 방안' 섹션을 작성하세요.\n" +
                 periodCondition +
-                "향후 점검이 필요한 사항을 구체적으로 기술합니다.\n" +
+                "## 필수 규칙\n" +
+                "- 이미 완료된 작업의 개선점(~하면 더 좋았을 것)을 적지 마세요.\n" +
+                "- 앞으로 더 좋은 방향으로 나아가기 위한 제안만 작성하세요.\n" +
+                "- 예: 향후 유사 기능 확장 시 고려할 점, 데이터 정합성 모니터링 방안, 사용자 피드백 수집 계획 등\n" +
+                "- 300자 이내로 간결하게 1~2개 항목만.\n" +
                 "형식:\n" +
                 "1. **{제안 제목}**\n" +
-                "   {구체적 설명}");
+                "   {구체적 설명 1~2문장}");
         report.append("### 개선 및 예방 방안\n\n").append(improvement).append("\n");
         log.info("보고서 전체 조립 완료 - {}자", report.length());
         return report.toString();
